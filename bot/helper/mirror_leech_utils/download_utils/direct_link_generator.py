@@ -100,6 +100,8 @@ def direct_link_generator(link):
         return swisstransfer(link)
     elif any(x in domain for x in ["akmfiles.com", "akmfls.xyz"]):
         return akmfiles(link)
+    elif search(r"bigwarp", domain):
+        return bigwarp(link)
     elif any(
         x in domain
         for x in [
@@ -239,6 +241,42 @@ def get_captcha_token(session, params):
     if token := findall(r'"rresp","(.*?)"', res.text):
         return token[0]
 
+def bigapi(url: str, endpoint: str = "https://bigapi.pakai.eu.org/api/resolve", timeout: int = 30) -> str:
+    """
+    Generate a direct download link via BigAPI resolver.
+    @param url: Original URL to resolve (YouTube, drive, etc.)
+    @param endpoint: BigAPI resolve endpoint
+    @param timeout: HTTP timeout (seconds)
+    @return: Direct download link (string)
+    """
+    try:
+        resp = get(
+            endpoint,
+            params={"url": url},
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "teleloader/1.0"
+            },
+            timeout=timeout
+        )
+        resp.raise_for_status()
+        data = resp.json()
+
+        # Struktur BigAPI: {"results":[{"source_url":"...", "attempts": {"x": {...}, ...}}]}
+        results = data.get("results") or []
+        for item in results:
+            attempts = (item or {}).get("attempts") or {}
+            # pilih attempt pertama yang ok
+            for _, attempt in attempts.items():
+                if isinstance(attempt, dict) and attempt.get("ok"):
+                    direct = attempt.get("direct_url")
+                    if direct:
+                        return direct
+
+        raise DirectDownloadLinkException("ERROR: No direct_url found (all attempts failed)")
+
+    except Exception as e:
+        raise DirectDownloadLinkException(f"ERROR: {str(e)}") from e
 
 def transfer_it(url):
     resp = post("https://transfer-it-henna.vercel.app/post", json={"url": url})
