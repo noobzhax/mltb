@@ -241,7 +241,7 @@ def get_captcha_token(session, params):
     if token := findall(r'"rresp","(.*?)"', res.text):
         return token[0]
 
-def bigapi(url: str, endpoint: str = "https://bigapi.pakai.eu.org/api/resolve", timeout: int = 30) -> str:
+def bigwarp(url: str, endpoint: str = "https://bigapi.pakai.eu.org/api/resolve", timeout: int = 30) -> str:
     """
     Generate a direct download link via BigAPI resolver.
     @param url: Original URL to resolve (YouTube, drive, etc.)
