@@ -23,7 +23,7 @@ async def send_message(message, text, buttons=None, block=True):
         if not block:
             return str(f)
         await sleep(f.value * 1.2)
-        return await send_message(message, text, buttons)
+        return await send_message(message, text, buttons, block)
     except Exception as e:
         LOGGER.error(str(e))
         return str(e)
@@ -40,7 +40,7 @@ async def edit_message(message, text, buttons=None, block=True):
         if not block:
             return str(f)
         await sleep(f.value * 1.2)
-        return await edit_message(message, text, buttons)
+        return await edit_message(message, text, buttons, block)
     except Exception as e:
         LOGGER.error(str(e))
         return str(e)

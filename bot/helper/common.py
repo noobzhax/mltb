@@ -1,4 +1,5 @@
 from aiofiles.os import path as aiopath, remove, makedirs, listdir
+from aiofiles import open as aiopen
 from asyncio import sleep, gather
 from os import walk, path as ospath
 from secrets import token_urlsafe
@@ -8,6 +9,7 @@ from re import sub, I, findall
 from shlex import split
 from collections import Counter
 from copy import deepcopy
+from natsort import natsorted
 
 from .. import (
     user_data,
@@ -51,6 +53,7 @@ from .ext_utils.media_utils import (
     take_ss,
     get_document_type,
     FFMpeg,
+    ffconcat_escape,
 )
 from .telegram_helper.message_utils import (
     send_message,
@@ -595,13 +598,17 @@ class TaskConfig:
                 chat_id=self.message.chat.id,
                 message_ids=self.message.reply_to_message_id + 1,
             )
+            if nextmsg.empty:
+                await send_message(
+                    self.message,
+                    "Bot can't fetch old messages (older than 48H), forward those messages and try multi/bulk again!",
+                )
+                await send_status_message(self.message)
+                return
             msgts = " ".join(msg)
             if self.multi > 2:
                 msgts += f"\nCancel Multi: <code>/{BotCommands.CancelTaskCommand[1]} {self.multi_tag}</code>"
             nextmsg = await send_message(nextmsg, msgts)
-        nextmsg = await self.client.get_messages(
-            chat_id=self.message.chat.id, message_ids=nextmsg.id
-        )
         if self.message.from_user:
             nextmsg.from_user = self.user
         else:
@@ -640,9 +647,6 @@ class TaskConfig:
                 multi_tags.add(self.multi_tag)
                 msg += f"\nCancel Multi: <code>/{BotCommands.CancelTaskCommand[1]} {self.multi_tag}</code>"
             nextmsg = await send_message(self.message, msg)
-            nextmsg = await self.client.get_messages(
-                chat_id=self.message.chat.id, message_ids=nextmsg.id
-            )
             if self.message.from_user:
                 nextmsg.from_user = self.user
             else:
@@ -762,7 +766,9 @@ class TaskConfig:
                 if not input_file:
                     LOGGER.error("Wrong FFmpeg cmd!")
                     return dl_path
-                if input_file.strip().endswith(".video"):
+                if input_file.strip().endswith(".video") or input_file.strip().endswith(
+                    ".txt"
+                ):
                     ext = "video"
                 elif input_file.strip().endswith(".audio"):
                     ext = "audio"
@@ -831,31 +837,51 @@ class TaskConfig:
                         await move(file_path, dl_path)
                         await rmtree(new_folder)
                 else:
-                    for dirpath, _, files in await sync_to_async(
-                        walk, dl_path, topdown=False
+                    for dirpath, _, files in natsorted(
+                        await sync_to_async(walk, dl_path, topdown=False)
                     ):
-                        for file_ in files:
+                        f_path = []
+                        for file_ in natsorted(files):
+                            if (
+                                ospath.join(dirpath, file_) in f_path
+                                or file_ == "mltb.txt"
+                            ):
+                                continue
                             var_cmd = cmd.copy()
                             if self.is_cancelled:
                                 return False
-                            f_path = ospath.join(dirpath, file_)
-                            is_video, is_audio, _ = await get_document_type(f_path)
-                            if not is_video and not is_audio:
-                                continue
-                            elif is_video and ext == "audio":
-                                continue
-                            elif is_audio and not is_video and ext == "video":
-                                continue
-                            elif ext not in [
-                                "all",
-                                "audio",
-                                "video",
-                            ] and not f_path.strip().lower().endswith(ext):
-                                continue
+                            if "concat" not in var_cmd:
+                                f_path = ospath.join(dirpath, file_)
+                                is_video, is_audio, _ = await get_document_type(f_path)
+                                if not is_video and not is_audio:
+                                    continue
+                                elif is_video and ext == "audio":
+                                    continue
+                                elif is_audio and not is_video and ext == "video":
+                                    continue
+                                elif ext not in [
+                                    "all",
+                                    "audio",
+                                    "video",
+                                ] and not f_path.strip().lower().endswith(ext):
+                                    continue
                             self.proceed_count += 1
                             for index in input_indexes:
                                 if cmd[index + 1].startswith("mltb"):
-                                    var_cmd[index + 1] = f_path
+                                    if cmd[index + 1].endswith("txt"):
+                                        txt = ""
+                                        for mf in natsorted(files):
+                                            df = ospath.join(dirpath, mf)
+                                            if (await get_document_type(df))[0]:
+                                                f_path.append(df)
+                                                txt += f"file '{ffconcat_escape(df)}'\n"
+                                        async with aiopen(
+                                            f"{dirpath}/mltb.txt", "w"
+                                        ) as f:
+                                            await f.write(txt)
+                                        var_cmd[index + 1] = f"{dirpath}/mltb.txt"
+                                    else:
+                                        var_cmd[index + 1] = f_path
                                 elif is_telegram_link(cmd[index + 1]):
                                     msg = (await get_tg_link_message(cmd[index + 1]))[0]
                                     file_dir = await temp_download(msg)
@@ -871,17 +897,28 @@ class TaskConfig:
                                 await cpu_eater_lock.acquire()
                                 self.progress = True
                             LOGGER.info(f"Running ffmpeg cmd for: {f_path}")
-                            self.subsize = await get_path_size(f_path)
+                            if isinstance(f_path, list):
+                                self.subsize = 0
+                                for mf in f_path:
+                                    self.subsize += await get_path_size(mf)
+                            else:
+                                self.subsize = await get_path_size(f_path)
                             self.subname = file_
                             res = await ffmpeg.ffmpeg_cmds(var_cmd, f_path)
                             if res and delete_files:
-                                await remove(f_path)
+                                if isinstance(f_path, list):
+                                    for mf in f_path:
+                                        await remove(mf)
+                                else:
+                                    await remove(f_path)
                                 if len(res) == 1:
                                     file_name = ospath.basename(res[0])
                                     if file_name.startswith("ffmpeg"):
                                         newname = file_name.split(".", 1)[-1]
                                         newres = ospath.join(dirpath, newname)
                                         await move(res[0], newres)
+                            if await aiopath.exists(f"{dirpath}/mltb.txt"):
+                                await remove(f"{dirpath}/mltb.txt")
                 for inp in inputs.values():
                     if "/temp/" in inp and aiopath.exists(inp):
                         await remove(inp)

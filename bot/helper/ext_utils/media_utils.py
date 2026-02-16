@@ -31,6 +31,10 @@ async def create_thumb(msg, _id=""):
     return output
 
 
+def ffconcat_escape(path):
+    return path.replace("'", r"'\''")
+
+
 async def get_media_info(path):
     try:
         result = await cmd_exec(
@@ -381,13 +385,20 @@ class FFMpeg:
 
     async def ffmpeg_cmds(self, ffmpeg, f_path):
         self.clear()
-        self._total_time = (await get_media_info(f_path))[0]
-        base_name, ext = ospath.splitext(f_path)
+        if isinstance(f_path, list):
+            self._total_time = 0
+            for f in f_path:
+                self._total_time += (await get_media_info(f))[0]
+            base_name = ospath.commonprefix(f_path)
+            ext = f_path[0].rsplit(".", 1)[-1]
+        else:
+            self._total_time = (await get_media_info(f_path))[0]
+            base_name, ext = ospath.splitext(f_path)
         dir, base_name = base_name.rsplit("/", 1)
         indices = [
             index
             for index, item in enumerate(ffmpeg)
-            if item.startswith("mltb") or item == "mltb"
+            if (item.startswith("mltb") or item == "mltb") and item != "mltb.txt"
         ]
         outputs = []
         for index in indices:
@@ -395,10 +406,10 @@ class FFMpeg:
             if output_file != "mltb" and output_file.startswith("mltb"):
                 bo, oext = ospath.splitext(output_file)
                 if oext:
-                    if ext == oext:
-                        prefix = f"ffmpeg{index}." if bo == "mltb" else ""
-                    else:
+                    if isinstance(f_path, list) or ext != oext:
                         prefix = ""
+                    else:
+                        prefix = f"ffmpeg{index}." if bo == "mltb" else ""
                     ext = ""
                 else:
                     prefix = ""
@@ -754,4 +765,3 @@ class FFMpeg:
             start_time += lpd - 3
             i += 1
         return True
-

@@ -281,7 +281,7 @@ class TelegramUploader:
                     self._last_msg_in_group = False
                     self._last_uploaded = 0
                     await self._upload_file(cap_mono, file_, f_path)
-                    if not self._sent_msg.media_group_id:
+                    if self._sent_msg and self._sent_msg.media_group_id:
                         for ch, ch_data in list(
                             self._listener.clone_dump_chats.items()
                         ):

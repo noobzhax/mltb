@@ -22,7 +22,7 @@ INCOMPLETE_TASK_NOTIFIER = False
 YT_DLP_OPTIONS = ""
 USE_SERVICE_ACCOUNTS = False
 NAME_SUBSTITUTE = r""
-FFMPEG_CMDS = {}
+FFMPEG_CMDS = {"merge": ["-f concat -safe 0 -i mltb.txt -c copy mltb.mp4 -del"]}
 UPLOAD_PATHS = {}
 # GDrive Tools
 GDRIVE_ID = ""

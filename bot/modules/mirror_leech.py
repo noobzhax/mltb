@@ -230,9 +230,6 @@ class Mirror(TaskListener):
             self.options = " ".join(input_list[1:])
             b_msg.append(f"{self.bulk[0]} -i {len(self.bulk)} {self.options}")
             nextmsg = await send_message(self.message, " ".join(b_msg))
-            nextmsg = await self.client.get_messages(
-                chat_id=self.message.chat.id, message_ids=nextmsg.id
-            )
             if self.message.from_user:
                 nextmsg.from_user = self.user
             else:
