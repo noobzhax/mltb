@@ -181,6 +181,11 @@ class TaskListener(TaskConfig):
                 self.up_dir or self.dir, self.included_extensions
             )
 
+        if not await aiopath.exists(up_path):
+            e = "No files to upload. In case you have filled EXCLUDED/INCLUDED EXTENSIONS, then check if all files have those extensions or not."
+            await self.on_upload_error(str(e))
+            return
+
         if not Config.QUEUE_ALL:
             async with queue_dict_lock:
                 if self.mid in non_queued_dl:

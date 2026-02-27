@@ -920,7 +920,7 @@ class TaskConfig:
                             if await aiopath.exists(f"{dirpath}/mltb.txt"):
                                 await remove(f"{dirpath}/mltb.txt")
                 for inp in inputs.values():
-                    if "/temp/" in inp and aiopath.exists(inp):
+                    if "/temp/" in inp and await aiopath.exists(inp):
                         await remove(inp)
         finally:
             if checked:
