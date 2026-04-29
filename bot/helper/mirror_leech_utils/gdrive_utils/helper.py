@@ -7,6 +7,7 @@ from os import path as ospath, listdir
 from pickle import load as pload
 from random import randrange
 from re import search as re_search
+from time import time
 from urllib.parse import parse_qs, urlparse
 from tenacity import (
     retry,
@@ -45,7 +46,6 @@ class GoogleDriveHelper:
         self.proc_bytes = 0
         self.total_time = 0
         self.status = None
-        self.update_interval = 3
         self.use_sa = Config.USE_SERVICE_ACCOUNTS
 
     @property
@@ -59,7 +59,7 @@ class GoogleDriveHelper:
     def processed_bytes(self):
         return self.proc_bytes
 
-    async def progress(self):
+    def progress(self):
         if self.status is not None:
             chunk_size = (
                 self.status.total_size * self.status.progress()
@@ -67,7 +67,7 @@ class GoogleDriveHelper:
             )
             self.file_processed_bytes = self.status.total_size * self.status.progress()
             self.proc_bytes += chunk_size
-            self.total_time += self.update_interval
+        self.total_time = time() - self._start_time
 
     def authorize(self):
         credentials = None
@@ -111,14 +111,15 @@ class GoogleDriveHelper:
             link = link.replace("tp:", "", 1)
         if is_gdrive_id(link):
             return link
-        if "folders" in link or "file" in link:
-            regex = r"https:\/\/drive\.google\.com\/(?:drive(.*?)\/folders\/|file(.*?)?\/d\/)([-\w]+)"
-            res = re_search(regex, link)
-            if res is None:
-                raise IndexError("G-Drive ID not found.")
-            return res.group(3)
+        if match := re_search(r"/d/([-\w]+)", link):
+            return match.group(1)
+        if match := re_search(r"/folders/([-\w]+)", link):
+            return match.group(1)
         parsed = urlparse(link)
-        return parse_qs(parsed.query)["id"][0]
+        qs = parse_qs(parsed.query)
+        if "id" in qs:
+            return qs["id"][0]
+        raise IndexError("G-Drive ID not found.")
 
     @retry(
         wait=wait_exponential(multiplier=2, min=3, max=6),

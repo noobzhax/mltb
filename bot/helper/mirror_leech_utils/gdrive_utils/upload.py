@@ -1,6 +1,7 @@
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 from logging import getLogger
+from time import time
 from os import path as ospath, listdir, remove
 from tenacity import (
     retry,
@@ -22,9 +23,9 @@ LOGGER = getLogger(__name__)
 class GoogleDriveUpload(GoogleDriveHelper):
     def __init__(self, listener, path):
         self.listener = listener
-        self._updater = None
         self._path = path
         self._is_errored = False
+        self._start_time = time()
         super().__init__()
         self.is_uploading = True
 
@@ -44,7 +45,6 @@ class GoogleDriveUpload(GoogleDriveHelper):
         self.user_setting()
         self.service = self.authorize()
         LOGGER.info(f"Uploading: {self._path}")
-        self._updater = SetInterval(self.update_interval, self.progress)
         try:
             if ospath.isfile(self._path):
                 mime_type = get_mime_type(self._path)
@@ -82,7 +82,6 @@ class GoogleDriveUpload(GoogleDriveHelper):
             async_to_sync(self.listener.on_upload_error, err)
             self._is_errored = True
         finally:
-            self._updater.cancel()
             if self.listener.is_cancelled and not self._is_errored:
                 if mime_type == "Folder" and dir_id:
                     LOGGER.info("Deleting uploaded data from Drive...")
@@ -142,7 +141,9 @@ class GoogleDriveUpload(GoogleDriveHelper):
         if dest_id is not None:
             file_metadata["parents"] = [dest_id]
 
-        if ospath.getsize(file_path) == 0:
+        file_size = ospath.getsize(file_path)
+
+        if file_size == 0:
             media_body = MediaFileUpload(file_path, mimetype=mime_type, resumable=False)
             response = (
                 self.service.files()
@@ -172,6 +173,12 @@ class GoogleDriveUpload(GoogleDriveHelper):
         while response is None and not self.listener.is_cancelled:
             try:
                 self.status, response = drive_file.next_chunk()
+                self.progress()
+                if self.status is None:
+                    if self.file_processed_bytes and response:
+                        self.proc_bytes += file_size - self.file_processed_bytes
+                    else:
+                        self.proc_bytes += file_size
             except HttpError as err:
                 if err.resp.status in [500, 502, 503, 504, 429] and retries < 10:
                     retries += 1
@@ -196,6 +203,7 @@ class GoogleDriveUpload(GoogleDriveHelper):
                                 return
                             self.switch_service_account()
                             LOGGER.info(f"Got: {reason}, Trying Again...")
+                            self.proc_bytes -= self.file_processed_bytes
                             return self._upload_file(
                                 file_path,
                                 file_name,

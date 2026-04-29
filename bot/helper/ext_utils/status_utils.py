@@ -2,12 +2,11 @@ from html import escape
 from psutil import virtual_memory, cpu_percent, disk_usage
 from time import time
 from asyncio import iscoroutinefunction, gather
+from pyrogram.types import InlineKeyboardButton
 
 from ... import task_dict, task_dict_lock, bot_start_time, status_dict, DOWNLOAD_DIR
 from ...core.config_manager import Config
-from pyrogram.types import InlineKeyboardButton
 from ..telegram_helper.button_build import ButtonMaker
-from ..telegram_helper.bot_commands import BotCommands
 
 SIZE_UNITS = ["B", "KB", "MB", "GB", "TB", "PB"]
 
@@ -228,7 +227,7 @@ async def get_readable_message(sid, is_user, page_no=1, status="All", page_step=
             msg += f" | <b>Time: </b>{task.seeding_time()}"
         else:
             msg += f"\n<b>Size: </b>{task.size()}"
-        msg += f"\n<code>/{BotCommands.CancelTaskCommand[1]} {task.gid()}</code>\n\n"
+        msg += f"\n<b>Gid: </b><code>{task.gid()}</code>\n\n"
         task_gids.append((index + start_position, task.gid()))
 
     if len(msg) == 0:

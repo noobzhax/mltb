@@ -2,7 +2,11 @@ from re import match as re_match
 
 
 def is_magnet(url: str):
-    return bool(re_match(r"^magnet:\?.*xt=urn:(btih|btmh):([a-zA-Z0-9]{32,40}|[a-z2-7]{32}).*", url))
+    return bool(
+        re_match(
+            r"^magnet:\?.*xt=urn:(btih|btmh):([a-zA-Z0-9]{32,40}|[a-z2-7]{32}).*", url
+        )
+    )
 
 
 def is_url(url: str):
@@ -15,7 +19,11 @@ def is_url(url: str):
 
 
 def is_gdrive_link(url: str):
-    return "drive.google.com" in url or "drive.usercontent.google.com" in url
+    return (
+        "drive.google.com" in url
+        or "drive.usercontent.google.com" in url
+        or "docs.google.com" in url
+    )
 
 
 def is_telegram_link(url: str):
