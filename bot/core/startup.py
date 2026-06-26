@@ -199,9 +199,6 @@ async def update_variables():
         Config.LEECH_SPLIT_SIZE = TgClient.MAX_SPLIT_SIZE
 
     Config.HYBRID_LEECH = bool(Config.HYBRID_LEECH and TgClient.IS_PREMIUM_USER)
-    Config.USER_TRANSMISSION = bool(
-        Config.USER_TRANSMISSION and TgClient.IS_PREMIUM_USER
-    )
 
     if Config.AUTHORIZED_CHATS:
         aid = Config.AUTHORIZED_CHATS.split()
