@@ -20,6 +20,7 @@ from ..helper.ext_utils.links_utils import (
     is_telegram_link,
     is_gdrive_id,
     is_tldv_link,
+    is_vidara_link,
 )
 from ..helper.listeners.task_listener import TaskListener
 from ..helper.mirror_leech_utils.download_utils.aria2_download import (
@@ -40,6 +41,9 @@ from ..helper.mirror_leech_utils.download_utils.direct_downloader import (
 )
 from ..helper.mirror_leech_utils.download_utils.tldv_downloader import (
     add_tldv_download,
+)
+from ..helper.mirror_leech_utils.download_utils.vidara_downloader import (
+    add_vidara_download,
 )
 from ..helper.mirror_leech_utils.download_utils.direct_link_generator import (
     direct_link_generator,
@@ -153,7 +157,7 @@ class Mirror(TaskListener):
         self.thumbnail_layout = args["-tl"]
         self.as_doc = args["-doc"]
         self.as_med = args["-med"]
-        self.folder_name = f"/{args["-m"]}".rstrip("/") if len(args["-m"]) > 0 else ""
+        self.folder_name = f"/{args['-m']}".rstrip("/") if len(args["-m"]) > 0 else ""
         self.bot_trans = args["-bt"]
         self.user_trans = args["-ut"]
         self.is_alldebrid = args["-ad"]
@@ -494,6 +498,8 @@ class Mirror(TaskListener):
             await add_gd_download(self, path)
         elif is_tldv_link(self.link):
             await add_tldv_download(self, path, headers)
+        elif is_vidara_link(self.link):
+            await add_vidara_download(self, path)
         else:
             ussr = args["-au"]
             pssw = args["-ap"]
