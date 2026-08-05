@@ -1,5 +1,6 @@
 import asyncio
 import os
+import random
 import re
 import time
 from secrets import token_urlsafe
@@ -155,24 +156,57 @@ class VidaraDownloader:
         self._seg_urls = seg_urls
 
     async def _make_thumbnail(self, video_path, thumb_path):
-        """Snapshot a frame from the video as thumbnail (only used for leech)."""
+        """Snapshot 4 random frames from the video and tile them into a
+        2x2 grid thumbnail (used only for leech)."""
         try:
-            # take a frame at ~10% of duration
+            out, err, code = await cmd_exec(
+                ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", video_path]
+            )
+            duration = float(out.strip() or 0)
+            if duration <= 0:
+                return None
+            # 4 random timestamps, spaced apart, avoiding the very edges
+            step = max(duration / 10, 1.0)
+            low, high = step, duration - step
+            if high <= low:
+                return None
+            picks = sorted(random.uniform(low, high) for _ in range(4))
+            times = ",".join(f"{t:.2f}" for t in picks)
+
+            tmp_dir = os.path.join(os.path.dirname(thumb_path), "frames")
+            await makedirs(tmp_dir, exist_ok=True)
+            for i in range(4):
+                await cmd_exec(
+                    [
+                        "ffmpeg", "-y", "-ss", f"{picks[i]:.2f}", "-i", video_path,
+                        "-vframes", "1", "-q:v", "2",
+                        os.path.join(tmp_dir, f"f{i}.jpg"),
+                    ]
+                )
+            frames = [os.path.join(tmp_dir, f"f{i}.jpg") for i in range(4)]
+            if not all(os.path.exists(f) for f in frames):
+                return None
+
+            # tile 2x2 (scale to uniform height first — ffmpeg 6.x hstack
+            # requires same height; `gap` option unsupported on this build)
             out, err, code = await cmd_exec(
                 [
-                    "ffmpeg",
-                    "-y",
-                    "-ss",
-                    "00:00:01",
-                    "-i",
-                    video_path,
-                    "-vframes",
-                    "1",
-                    "-q:v",
-                    "2",
-                    thumb_path,
+                    "ffmpeg", "-y",
+                    "-i", frames[0], "-i", frames[1], "-i", frames[2], "-i", frames[3],
+                    "-filter_complex",
+                    "[0]scale=480:-1[a];[1]scale=480:-1[b];[2]scale=480:-1[c];"
+                    "[3]scale=480:-1[d];[a][b]hstack[t];[c][d]hstack[bt];"
+                    "[t][bt]vstack",
+                    "-q:v", "2", thumb_path,
                 ]
             )
+            for f in frames:
+                try:
+                    await aioremove(f)
+                except OSError:
+                    pass
+            await rmtree(tmp_dir, ignore_errors=True)
             if code == 0 and os.path.exists(thumb_path):
                 return thumb_path
             return None
