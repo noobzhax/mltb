@@ -166,17 +166,16 @@ class VidaraDownloader:
             duration = float(out.strip() or 0)
             if duration <= 0:
                 return None
-            # 4 random timestamps, spaced apart, avoiding the very edges
+            # 9 random timestamps, spaced apart, avoiding the very edges
             step = max(duration / 10, 1.0)
             low, high = step, duration - step
             if high <= low:
                 return None
-            picks = sorted(random.uniform(low, high) for _ in range(4))
-            times = ",".join(f"{t:.2f}" for t in picks)
+            picks = sorted(random.uniform(low, high) for _ in range(9))
 
             tmp_dir = os.path.join(os.path.dirname(thumb_path), "frames")
             await makedirs(tmp_dir, exist_ok=True)
-            for i in range(4):
+            for i in range(9):
                 await cmd_exec(
                     [
                         "ffmpeg", "-y", "-ss", f"{picks[i]:.2f}", "-i", video_path,
@@ -184,20 +183,24 @@ class VidaraDownloader:
                         os.path.join(tmp_dir, f"f{i}.jpg"),
                     ]
                 )
-            frames = [os.path.join(tmp_dir, f"f{i}.jpg") for i in range(4)]
+            frames = [os.path.join(tmp_dir, f"f{i}.jpg") for i in range(9)]
             if not all(os.path.exists(f) for f in frames):
                 return None
 
-            # tile 2x2 (scale to uniform height first — ffmpeg 6.x hstack
+            # tile 3x3 (scale to uniform height first — ffmpeg 6.x hstack
             # requires same height; `gap` option unsupported on this build)
             out, err, code = await cmd_exec(
                 [
                     "ffmpeg", "-y",
-                    "-i", frames[0], "-i", frames[1], "-i", frames[2], "-i", frames[3],
+                    "-i", frames[0], "-i", frames[1], "-i", frames[2],
+                    "-i", frames[3], "-i", frames[4], "-i", frames[5],
+                    "-i", frames[6], "-i", frames[7], "-i", frames[8],
                     "-filter_complex",
-                    "[0]scale=480:-1[a];[1]scale=480:-1[b];[2]scale=480:-1[c];"
-                    "[3]scale=480:-1[d];[a][b]hstack[t];[c][d]hstack[bt];"
-                    "[t][bt]vstack",
+                    "[0]scale=320:-1[a0];[1]scale=320:-1[a1];[2]scale=320:-1[a2];"
+                    "[3]scale=320:-1[a3];[4]scale=320:-1[a4];[5]scale=320:-1[a5];"
+                    "[6]scale=320:-1[a6];[7]scale=320:-1[a7];[8]scale=320:-1[a8];"
+                    "[a0][a1][a2]hstack=3[r0];[a3][a4][a5]hstack=3[r1];"
+                    "[a6][a7][a8]hstack=3[r2];[r0][r1][r2]vstack=3",
                     "-q:v", "2", thumb_path,
                 ]
             )
