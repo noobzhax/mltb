@@ -320,9 +320,11 @@ class VidaraDownloader:
         self.listener.name = self.name
         self.listener.size = os.path.getsize(final_path)
 
-        # khusus leech: snapshot thumbnail dari video
+        # khusus leech: snapshot thumbnail dari video.
+        # simpan DI LUAR path download supaya uploader (walk) tidak
+        # meng-upload file thumb sebagai file terpisah.
         if getattr(self.listener, "is_leech", False):
-            thumb_dir = os.path.join(self._path, "_vidara_thumb")
+            thumb_dir = "/tmp/vidara_thumbs"
             await makedirs(thumb_dir, exist_ok=True)
             thumb_path = os.path.join(thumb_dir, f"{self.filecode}_thumb.jpg")
             thumb = await self._make_thumbnail(final_path, thumb_path)
