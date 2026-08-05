@@ -34,6 +34,7 @@ class VidaraDownloader:
         self.start_time = None
         self.gid = token_urlsafe(10)
         self.name = ""
+        self.filecode = ""
 
     @property
     def estimated_total_size(self):
@@ -44,21 +45,43 @@ class VidaraDownloader:
             )
         return 0
 
-    async def _fetch_stream_url(self, client):
+    async def _fetch_stream_info(self, client):
+        """Call the Vidara extract API; returns dict with streaming_url,
+        title, thumbnail, subtitles. Raises ValueError with a user-friendly
+        message on any failure."""
         match = _ID_RE.search(self.listener.link)
         if not match:
             raise ValueError("Invalid Vidara URL format")
         filecode = match.group(1)
-        resp = await client.post(
-            VIDARA_API, json={"filecode": filecode}, timeout=30.0
-        )
+        self.filecode = filecode
+
+        try:
+            resp = await client.post(
+                VIDARA_API, json={"filecode": filecode}, timeout=30.0
+            )
+        except Exception as e:
+            raise ValueError(f"Vidara API unreachable: {e}")
+
         if resp.status_code != 200:
-            raise ValueError(f"Vidara API error (HTTP {resp.status_code})")
-        data = resp.json()
-        stream_url = (data or {}).get("streaming_url") or ""
+            raise ValueError(
+                f"Vidara API error (HTTP {resp.status_code})"
+            )
+
+        try:
+            data = resp.json()
+        except Exception:
+            raise ValueError("Vidara API returned invalid JSON")
+
+        if not isinstance(data, dict):
+            raise ValueError("Vidara API returned unexpected payload")
+
+        stream_url = (data.get("streaming_url") or "").strip()
         if not stream_url:
-            raise ValueError("No streaming_url returned by Vidara API")
-        return stream_url
+            raise ValueError(
+                "No streaming_url returned by Vidara API — video may be private or expired"
+            )
+
+        return data
 
     async def _download_segment(self, client, url, index, temp_dir):
         if self.listener.is_cancelled:
@@ -129,6 +152,31 @@ class VidaraDownloader:
         await asyncio.gather(*(worker(u, i) for i, u in enumerate(seg_urls)))
         self._seg_urls = seg_urls
 
+    async def _make_thumbnail(self, video_path, thumb_path):
+        """Snapshot a frame from the video as thumbnail (only used for leech)."""
+        try:
+            # take a frame at ~10% of duration
+            out, err, code = await cmd_exec(
+                [
+                    "ffmpeg",
+                    "-y",
+                    "-ss",
+                    "00:00:01",
+                    "-i",
+                    video_path,
+                    "-vframes",
+                    "1",
+                    "-q:v",
+                    "2",
+                    thumb_path,
+                ]
+            )
+            if code == 0 and os.path.exists(thumb_path):
+                return thumb_path
+            return None
+        except Exception:
+            return None
+
     async def download(self):
         self.is_downloading = True
         self.start_time = time.time()
@@ -138,6 +186,7 @@ class VidaraDownloader:
             await self.listener.on_download_error("Invalid Vidara URL format")
             return
         filecode = match.group(1)
+        self.filecode = filecode
 
         temp_dir = os.path.join(self._path, "_vidara_temp")
         await makedirs(temp_dir, exist_ok=True)
@@ -147,9 +196,18 @@ class VidaraDownloader:
             async with AsyncClient(
                 verify=False, follow_redirects=True, timeout=30.0
             ) as client:
-                master_url = await self._fetch_stream_url(client)
+                info = await self._fetch_stream_info(client)
                 if self.listener.is_cancelled:
                     return
+                master_url = info["streaming_url"]
+
+                title = (info.get("title") or "").strip()
+                if title:
+                    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title).strip()
+                    if safe_title:
+                        final_path = os.path.join(self._path, f"{safe_title}.mp4")
+                        self.name = os.path.basename(final_path)
+
                 await self._download_playlist(client, master_url, temp_dir)
                 if self.listener.is_cancelled:
                     return
@@ -218,9 +276,21 @@ class VidaraDownloader:
             await aioremove(final_path, ignore_errors=True)
             return
 
-        self.name = os.path.basename(final_path)
+        if not self.name:
+            self.name = os.path.basename(final_path)
         self.listener.name = self.name
         self.listener.size = os.path.getsize(final_path)
+
+        # khusus leech: snapshot thumbnail dari video
+        if getattr(self.listener, "is_leech", False):
+            thumb_dir = os.path.join(self._path, "_vidara_thumb")
+            await makedirs(thumb_dir, exist_ok=True)
+            thumb_path = os.path.join(thumb_dir, f"{self.filecode}_thumb.jpg")
+            thumb = await self._make_thumbnail(final_path, thumb_path)
+            if thumb:
+                self.listener.thumb = thumb
+                LOGGER.info(f"Vidara thumbnail: {thumb}")
+
         self.is_downloading = False
         await self.listener.on_download_complete()
 
