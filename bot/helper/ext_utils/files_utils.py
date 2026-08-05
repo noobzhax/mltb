@@ -19,6 +19,15 @@ from ...core.torrent_manager import TorrentManager
 from .bot_utils import sync_to_async, cmd_exec
 from .exceptions import NotSupportedExtractionArchive
 
+# Cache Magic MIME type detector as a singleton to avoid re-initialization overhead
+_mime_detector = None
+
+def _get_mime_detector():
+    global _mime_detector
+    if _mime_detector is None:
+        _mime_detector = Magic(mime=True)
+    return _mime_detector
+
 ARCH_EXT = [
     ".7z",
     ".apfs",
@@ -244,7 +253,7 @@ async def create_recursive_symlink(source, destination):
 def get_mime_type(file_path):
     if ospath.islink(file_path):
         file_path = readlink(file_path)
-    mime = Magic(mime=True)
+    mime = _get_mime_detector()
     mime_type = mime.from_file(file_path)
     mime_type = mime_type or "text/plain"
     return mime_type
@@ -351,6 +360,8 @@ async def split_file(f_path, split_size, listener):
 
 
 class SevenZ:
+    __slots__ = ("_listener", "_processed_bytes", "_percentage")
+
     def __init__(self, listener):
         self._listener = listener
         self._processed_bytes = 0
@@ -388,29 +399,34 @@ class SevenZ:
                 continue
             if match := re_search(pattern, line):
                 self._listener.subsize = int(match[1] or match[2] or match[3])
-        s = b""
+        # Read remaining output with line-based reading instead of character-by-character
         while not (
             self._listener.is_cancelled
             or self._listener.subproc.returncode is not None
             or self._listener.subproc.stdout.at_eof()
         ):
             try:
-                char = await wait_for(self._listener.subproc.stdout.read(1), 60)
+                line = await wait_for(self._listener.subproc.stdout.readline(), 60)
             except:
                 break
-            if not char:
+            if not line:
                 break
-            s += char
-            if char == b"%":
+            line = line.decode().strip()
+            if "%" in line:
                 try:
-                    self._percentage = s.decode().rsplit(" ", 1)[-1].strip()
-                    self._processed_bytes = (
-                        int(self._percentage.strip("%")) / 100
-                    ) * self._listener.subsize
+                    # Extract percentage from lines like "  95% 10000 bytes"
+                    perc = line.split("%", 1)[0].strip().rsplit(" ", 1)[-1]
+                    if perc.isdigit():
+                        self._percentage = f"{perc}%"
+                        self._processed_bytes = (
+                            int(self._percentage.strip("%")) / 100
+                        ) * self._listener.subsize
+                    else:
+                        self._percentage = "0%"
+                        self._processed_bytes = 0
                 except:
-                    self._processed_bytes = 0
                     self._percentage = "0%"
-                s = b""
+                    self._processed_bytes = 0
 
         self._processed_bytes = 0
         self._percentage = "0%"

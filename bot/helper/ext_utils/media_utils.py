@@ -10,6 +10,7 @@ from os import path as ospath
 from re import search as re_search, escape
 from time import time
 from aioshutil import rmtree
+import json
 
 from ... import LOGGER, DOWNLOAD_DIR, threads, cores
 from .bot_utils import cmd_exec, sync_to_async
@@ -53,7 +54,7 @@ async def get_media_info(path):
         LOGGER.error(f"Get Media Info: {e}. Mostly File not found! - File: {path}")
         return 0, None, None
     if result[0] and result[2] == 0:
-        fields = eval(result[0]).get("format")
+        fields = json.loads(result[0]).get("format")
         if fields is None:
             LOGGER.error(f"get_media_info: {result}")
             return 0, None, None
@@ -101,7 +102,7 @@ async def get_document_type(path):
             is_video = True
         return is_video, is_audio, is_image
     if result[0] and result[2] == 0:
-        fields = eval(result[0]).get("streams")
+        fields = json.loads(result[0]).get("streams")
         if fields is None:
             LOGGER.error(f"get_document_type: {result}")
             return is_video, is_audio, is_image
@@ -305,6 +306,13 @@ async def get_multiple_frames_thumbnail(video_file, layout, keep_screenshots):
 
 class FFMpeg:
 
+    __slots__ = (
+        "_listener", "_processed_bytes", "_last_processed_bytes",
+        "_processed_time", "_last_processed_time", "_speed_raw",
+        "_progress_raw", "_total_time", "_eta_raw", "_time_rate",
+        "_start_time"
+    )
+
     def __init__(self, listener):
         self._listener = listener
         self._processed_bytes = 0
@@ -415,7 +423,7 @@ class FFMpeg:
                     prefix = ""
             else:
                 prefix = f"ffmpeg{index}."
-            output = f"{dir}/{prefix}{output_file.replace("mltb", base_name)}{ext}"
+            output = f"{dir}/{prefix}{output_file.replace('mltb', base_name)}{ext}"
             outputs.append(output)
             ffmpeg[index] = output
         if self._listener.is_cancelled:

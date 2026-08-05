@@ -8,6 +8,7 @@ from asyncio import (
     run_coroutine_threadsafe,
     sleep,
 )
+from ast import literal_eval
 
 from ... import user_data, bot_loop
 from ...core.config_manager import Config
@@ -19,10 +20,13 @@ from .help_messages import (
     MIRROR_HELP_DICT,
     CLONE_HELP_DICT,
 )
+from os import cpu_count
 
 COMMAND_USAGE = {}
 
-THREAD_POOL = ThreadPoolExecutor(max_workers=500)
+# Use 2x CPU cores for I/O-bound tasks, but cap at 64 to avoid excessive resource usage
+CPU_COUNT = cpu_count() or 1
+THREAD_POOL = ThreadPoolExecutor(max_workers=min(CPU_COUNT * 2, 64))
 
 
 class SetInterval:
@@ -174,7 +178,7 @@ def arg_parser(items, arg_base):
                             arg_base[part].add(value)
                         else:
                             try:
-                                arg_base[part].add(tuple(eval(value)))
+                                arg_base[part].add(tuple(literal_eval(value)))
                             except:
                                 pass
                     else:

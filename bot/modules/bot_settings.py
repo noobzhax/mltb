@@ -8,6 +8,7 @@ from asyncio import (
     gather,
 )
 from functools import partial
+from ast import literal_eval
 from io import BytesIO
 from os import getcwd
 from pyrogram.filters import create
@@ -310,9 +311,9 @@ async def edit_variable(_, message, pre_message, key):
     elif value.isdigit():
         value = int(value)
     elif value.startswith("[") and value.endswith("]"):
-        value = eval(value)
+        value = literal_eval(value)
     elif value.startswith("{") and value.endswith("}"):
-        value = eval(value)
+        value = literal_eval(value)
     Config.set(key, value)
     await update_buttons(pre_message, "var")
     await delete_message(message)

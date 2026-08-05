@@ -4,6 +4,7 @@ from io import FileIO
 from time import time
 from logging import getLogger
 from os import makedirs, path as ospath
+import json
 from tenacity import (
     retry,
     wait_exponential,
@@ -149,7 +150,7 @@ class GoogleDriveDownload(GoogleDriveHelper):
             request = self.service.files().export_media(
                 fileId=file_id, mimeType=export["mime"]
             )
-            filename = f"{filename}{export["ext"]}"
+            filename = f"{filename}{export['ext']}"
         else:
             request = self.service.files().get_media(
                 fileId=file_id, supportsAllDrives=True, acknowledgeAbuse=True
@@ -186,7 +187,7 @@ class GoogleDriveDownload(GoogleDriveHelper):
                     continue
                 if err.resp.get("content-type", "").startswith("application/json"):
                     reason = (
-                        eval(err.content).get("error").get("errors")[0].get("reason")
+                        json.loads(err.content).get("error").get("errors")[0].get("reason")
                     )
                     if "fileNotDownloadable" in reason and "document" in mime_type:
                         self.proc_bytes -= self.file_processed_bytes

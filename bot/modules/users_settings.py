@@ -8,6 +8,7 @@ from pyrogram.filters import create
 from pyrogram.handlers import MessageHandler
 from time import time
 from re import findall
+from ast import literal_eval
 
 from .. import (
     user_data,
@@ -446,7 +447,7 @@ async def add_one(_, message, option):
     value = message.text
     if value.startswith("{") and value.endswith("}"):
         try:
-            value = eval(value)
+            value = literal_eval(value)
             if user_dict[option]:
                 user_dict[option].update(value)
             else:
@@ -505,7 +506,7 @@ async def set_option(_, message, option):
     ]:
         if value.startswith("{") and value.endswith("}"):
             try:
-                value = eval(value)
+                value = literal_eval(value)
             except Exception as e:
                 await send_message(message, str(e))
                 return

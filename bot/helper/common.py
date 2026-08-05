@@ -10,6 +10,7 @@ from shlex import split
 from collections import Counter
 from copy import deepcopy
 from natsort import natsorted
+from ast import literal_eval
 
 from .. import (
     user_data,
@@ -64,6 +65,25 @@ from .telegram_helper.message_utils import (
 
 
 class TaskConfig:
+    __slots__ = (
+        "mid", "user", "user_id", "user_dict", "clone_dump_chats",
+        "dir", "up_dir", "link", "up_dest", "rc_flags", "tag",
+        "name", "subname", "name_sub", "thumbnail_layout", "folder_name",
+        "split_size", "max_split_size", "multi", "size", "subsize",
+        "proceed_count", "_alldebrid_magnet_id", "_torbox_torrent_id",
+        "_torbox_web_id", "is_leech", "is_qbit", "is_nzb", "is_jd",
+        "is_clone", "is_ytdlp", "is_gallerydl", "is_alldebrid", "is_torbox",
+        "is_buzzheavier", "is_gofile", "equal_splits", "user_transmission",
+        "hybrid_leech", "extract", "compress", "select", "seed",
+        "join", "private_link", "stop_duplicate", "sample_video",
+        "convert_audio", "convert_video", "screen_shots", "is_cancelled",
+        "force_run", "force_download", "force_upload", "is_torrent",
+        "as_med", "as_doc", "is_file", "bot_trans", "user_trans",
+        "is_rss", "progress", "ffmpeg_cmds", "chat_thread_id", "subproc",
+        "thumb", "excluded_extensions", "included_extensions",
+        "files_to_proceed", "is_super_chat"
+    )
+
     def __init__(self):
         self.mid = self.message.id
         self.user = self.message.from_user or self.message.sender_chat
@@ -553,7 +573,7 @@ class TaskConfig:
                     if self.clone_dump_chats.startswith(
                         "["
                     ) and self.clone_dump_chats.endswith("]"):
-                        self.clone_dump_chats = eval(self.clone_dump_chats)
+                        self.clone_dump_chats = literal_eval(self.clone_dump_chats)
                     else:
                         self.clone_dump_chats = [self.clone_dump_chats]
                 temp_dict = {}

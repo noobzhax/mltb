@@ -1,4 +1,5 @@
 from gallery_dl import extractor
+from ast import literal_eval
 
 from .. import LOGGER, bot_loop, task_dict_lock, DOWNLOAD_DIR
 from ..core.config_manager import Config
@@ -91,7 +92,7 @@ class GalleryDL(TaskListener):
             self.multi = 0
 
         try:
-            opt = eval(args["-opt"]) if args["-opt"] else {}
+            opt = literal_eval(args["-opt"]) if args["-opt"] else {}
         except Exception as e:
             LOGGER.error(e)
             opt = {}
