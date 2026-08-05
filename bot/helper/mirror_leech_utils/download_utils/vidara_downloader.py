@@ -19,7 +19,7 @@ from ...telegram_helper.message_utils import send_status_message
 
 VIDARA_API = "https://vidara-api.pakai.eu.org/api/extract"
 
-_ID_RE = re.compile(r"vidara\.so/v/([a-zA-Z0-9]+)")
+_ID_RE = re.compile(r"vidara\.(?:so|to)/(?:v|e)/([a-zA-Z0-9]+)")
 
 
 class VidaraDownloader:
