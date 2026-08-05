@@ -156,8 +156,9 @@ class VidaraDownloader:
         self._seg_urls = seg_urls
 
     async def _make_thumbnail(self, video_path, thumb_path):
-        """Snapshot 4 random frames from the video and tile them into a
-        2x2 grid thumbnail (used only for leech)."""
+        """Snapshot 9 frames (3 from start zone, 3 from middle, 3 from end),
+        draw a small timestamp on each, tile into a tight 3x3 grid.
+        Used only for leech."""
         try:
             out, err, code = await cmd_exec(
                 ["ffprobe", "-v", "error", "-show_entries", "format=duration",
@@ -166,29 +167,47 @@ class VidaraDownloader:
             duration = float(out.strip() or 0)
             if duration <= 0:
                 return None
-            # 9 random timestamps, spaced apart, avoiding the very edges
-            step = max(duration / 10, 1.0)
-            low, high = step, duration - step
-            if high <= low:
+
+            # 3 zones: start 5-25%, middle 40-60%, end 75-95%
+            def _zone_random(lo_pct, hi_pct):
+                lo, hi = duration * lo_pct, duration * hi_pct
+                return sorted(random.uniform(lo, hi) for _ in range(3))
+
+            picks = (
+                _zone_random(0.05, 0.25)
+                + _zone_random(0.40, 0.60)
+                + _zone_random(0.75, 0.95)
+            )
+            if len(picks) != 9 or any(p <= 0 or p >= duration for p in picks):
                 return None
-            picks = sorted(random.uniform(low, high) for _ in range(9))
 
             tmp_dir = os.path.join(os.path.dirname(thumb_path), "frames")
             await makedirs(tmp_dir, exist_ok=True)
-            for i in range(9):
+            font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+            for i, t in enumerate(picks):
+                # format timestamp HH:MM:SS
+                h, rem = divmod(int(t), 3600)
+                m, s = divmod(rem, 60)
+                ts = f"{h:02d}:{m:02d}:{s:02d}"
                 await cmd_exec(
                     [
-                        "ffmpeg", "-y", "-ss", f"{picks[i]:.2f}", "-i", video_path,
-                        "-vframes", "1", "-q:v", "2",
-                        os.path.join(tmp_dir, f"f{i}.jpg"),
+                        "ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", video_path,
+                        "-vframes", "1",
+                        "-vf", (
+                            f"drawtext=fontfile={font}:text='{ts}':"
+                            "x=8:y=h-th-8:fontsize=20:fontcolor=white:"
+                            "box=1:boxcolor=black@0.5:boxborderw=4"
+                        ),
+                        "-q:v", "2", os.path.join(tmp_dir, f"f{i}.jpg"),
                     ]
                 )
             frames = [os.path.join(tmp_dir, f"f{i}.jpg") for i in range(9)]
             if not all(os.path.exists(f) for f in frames):
                 return None
 
-            # tile 3x3 (scale to uniform height first — ffmpeg 6.x hstack
-            # requires same height; `gap` option unsupported on this build)
+            # tight 3x3 grid (no gap; scale to uniform height — ffmpeg 6.x
+            # hstack requires same height; `gap` option unsupported)
             out, err, code = await cmd_exec(
                 [
                     "ffmpeg", "-y",
@@ -196,9 +215,9 @@ class VidaraDownloader:
                     "-i", frames[3], "-i", frames[4], "-i", frames[5],
                     "-i", frames[6], "-i", frames[7], "-i", frames[8],
                     "-filter_complex",
-                    "[0]scale=320:-1[a0];[1]scale=320:-1[a1];[2]scale=320:-1[a2];"
-                    "[3]scale=320:-1[a3];[4]scale=320:-1[a4];[5]scale=320:-1[a5];"
-                    "[6]scale=320:-1[a6];[7]scale=320:-1[a7];[8]scale=320:-1[a8];"
+                    "[0]scale=360:-1[a0];[1]scale=360:-1[a1];[2]scale=360:-1[a2];"
+                    "[3]scale=360:-1[a3];[4]scale=360:-1[a4];[5]scale=360:-1[a5];"
+                    "[6]scale=360:-1[a6];[7]scale=360:-1[a7];[8]scale=360:-1[a8];"
                     "[a0][a1][a2]hstack=3[r0];[a3][a4][a5]hstack=3[r1];"
                     "[a6][a7][a8]hstack=3[r2];[r0][r1][r2]vstack=3",
                     "-q:v", "2", thumb_path,
