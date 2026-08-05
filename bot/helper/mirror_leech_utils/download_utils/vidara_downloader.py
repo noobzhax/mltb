@@ -4,6 +4,7 @@ import random
 import re
 import time
 from secrets import token_urlsafe
+from urllib.parse import urlsplit
 
 import aiofiles
 from aiofiles.os import makedirs, remove as aioremove
@@ -111,6 +112,14 @@ class VidaraDownloader:
                     raise
                 await asyncio.sleep(2 * (attempt + 1))
 
+    @staticmethod
+    def _url_base(url):
+        """Directory of a URL, ignoring any query string (tokens may
+        contain '/' which breaks naive rsplit('/'))."""
+        parts = urlsplit(url)
+        path = parts.path.rsplit("/", 1)[0]
+        return f"{parts.scheme}://{parts.netloc}{path}"
+
     async def _download_playlist(self, client, master_url, temp_dir):
         resp = await client.get(master_url, timeout=20.0)
         if resp.status_code not in (200, 206):
@@ -124,19 +133,20 @@ class VidaraDownloader:
         variant_url = variant_lines[-1] if variant_lines else ""
 
         playlist_url = variant_url if variant_url.startswith("http") else (
-            master_url.rsplit("/", 1)[0] + "/" + variant_url
+            self._url_base(master_url) + "/" + variant_url
         )
         resp = await client.get(playlist_url, timeout=20.0)
         if resp.status_code not in (200, 206):
             raise ValueError(f"Failed to fetch media playlist (HTTP {resp.status_code})")
 
         seg_urls = []
+        seg_base = self._url_base(playlist_url)
         for ln in resp.text.splitlines():
             ln = ln.strip()
             if not ln or ln.startswith("#"):
                 continue
             seg_urls.append(
-                ln if ln.startswith("http") else playlist_url.rsplit("/", 1)[0] + "/" + ln
+                ln if ln.startswith("http") else seg_base + "/" + ln
             )
         if not seg_urls:
             raise ValueError("No segments found in media playlist")
