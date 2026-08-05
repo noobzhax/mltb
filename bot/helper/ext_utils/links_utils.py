@@ -69,7 +69,7 @@ def is_tldv_link(url: str):
 def is_vidara_link(url: str):
     return bool(
         re_match(
-            r"^https?://(?:www\\.)?vidara\\.so/v/[a-zA-Z0-9]+",
+            r"^https?://(?:www\.)?vidara\.so/v/[a-zA-Z0-9]+",
             url,
         )
     )
