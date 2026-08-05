@@ -21,7 +21,7 @@ from ...telegram_helper.message_utils import send_status_message
 
 VIDARA_API = "https://vidara-api.pakai.eu.org/api/extract"
 
-_ID_RE = re.compile(r"vidara\.(?:so|to)/(?:v|e)/([a-zA-Z0-9]+)")
+_ID_RE = re.compile(r"vidara\.[a-zA-Z0-9.-]+/(?:[a-zA-Z0-9]+/)*([a-zA-Z0-9]+)")
 
 
 class VidaraDownloader:
@@ -200,18 +200,27 @@ class VidaraDownloader:
                 h, rem = divmod(int(t), 3600)
                 m, s = divmod(rem, 60)
                 ts = f"{h:02d}:{m:02d}:{s:02d}"
+                # write text to file and use textfile= to avoid filter
+                # parsing issues with ':' in text= (ffmpeg 8 is stricter)
+                ts_file = os.path.join(tmp_dir, f"ts{i}.txt")
+                with open(ts_file, "w") as f:
+                    f.write(ts)
                 await cmd_exec(
                     [
                         "ffmpeg", "-y", "-ss", f"{t:.2f}", "-i", video_path,
                         "-vframes", "1",
                         "-vf", (
-                            f"drawtext=fontfile={font}:text='{ts}':"
+                            f"drawtext=fontfile={font}:textfile={ts_file}:"
                             "x=8:y=h-th-8:fontsize=20:fontcolor=white:"
                             "box=1:boxcolor=black@0.5:boxborderw=4"
                         ),
                         "-q:v", "2", os.path.join(tmp_dir, f"f{i}.jpg"),
                     ]
                 )
+                try:
+                    await aioremove(ts_file)
+                except OSError:
+                    pass
             frames = [os.path.join(tmp_dir, f"f{i}.jpg") for i in range(9)]
             if not all(os.path.exists(f) for f in frames):
                 return None

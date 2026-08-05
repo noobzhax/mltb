@@ -67,9 +67,11 @@ def is_tldv_link(url: str):
 
 
 def is_vidara_link(url: str):
+    # catch all vidara.* domains (any TLD) with any path; filecode is
+    # the last path token
     return bool(
         re_match(
-            r"^https?://(?:www\.)?vidara\.(?:so|to)/(?:v|e)/[a-zA-Z0-9]+",
+            r"^https?://(?:www\.)?vidara\.[a-zA-Z0-9.-]+/[a-zA-Z0-9/]+",
             url,
         )
     )
