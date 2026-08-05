@@ -91,8 +91,10 @@ class VidaraDownloader:
                 async with client.stream(
                     "GET", url, timeout=30.0
                 ) as response:
-                    if response.status_code != 200:
-                        raise Exception(f"HTTP status {response.status_code}")
+                    if response.status_code not in (200, 206):
+                        raise Exception(
+                            f"HTTP status {response.status_code}"
+                        )
                     file_path = os.path.join(temp_dir, f"seg_{index:05d}.ts")
                     async with aiofiles.open(file_path, "wb") as f:
                         async for chunk in response.aiter_bytes(
@@ -110,7 +112,7 @@ class VidaraDownloader:
 
     async def _download_playlist(self, client, master_url, temp_dir):
         resp = await client.get(master_url, timeout=20.0)
-        if resp.status_code != 200:
+        if resp.status_code not in (200, 206):
             raise ValueError(
                 f"Failed to fetch master playlist (HTTP {resp.status_code})"
             )
@@ -124,7 +126,7 @@ class VidaraDownloader:
             master_url.rsplit("/", 1)[0] + "/" + variant_url
         )
         resp = await client.get(playlist_url, timeout=20.0)
-        if resp.status_code != 200:
+        if resp.status_code not in (200, 206):
             raise ValueError(f"Failed to fetch media playlist (HTTP {resp.status_code})")
 
         seg_urls = []
