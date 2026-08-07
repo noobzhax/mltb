@@ -40,6 +40,10 @@ class VidaraDownloader:
         self._master_url = ""
         self._playlist_url = ""
         self._seg_urls = []
+        
+        # Speed calculation tracking
+        self._last_check_time = 0
+        self._last_bytes = 0
 
     @property
     def estimated_total_size(self):
@@ -131,6 +135,15 @@ class VidaraDownloader:
                                 return
                             await f.write(chunk)
                             self.processed_bytes += len(chunk)
+                            # Update speed tracking every 1MB (1_048_576 bytes)
+                            if self.processed_bytes - self._last_bytes >= 1_048_576:
+                                current_time = time.time()
+                                time_diff = current_time - self._last_check_time
+                                if time_diff > 0 and self.start_time:
+                                    bytes_diff = self.processed_bytes - self._last_bytes
+                                    self.speed = bytes_diff / time_diff
+                                self._last_check_time = current_time
+                                self._last_bytes = self.processed_bytes
                     return
             except asyncio.TimeoutError:
                 if attempt == 4:
@@ -383,7 +396,10 @@ class VidaraDownloader:
     async def download(self):
         self.is_downloading = True
         self.start_time = time.time()
-
+        # Initialize speed tracking
+        self._last_check_time = self.start_time
+        self._last_bytes = 0
+        
         match = _ID_RE.search(self.listener.link)
         if not match:
             await self.listener.on_download_error("Invalid Vidara URL format")
