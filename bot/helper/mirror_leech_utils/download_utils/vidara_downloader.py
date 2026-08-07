@@ -156,68 +156,21 @@ class VidaraDownloader:
         return data
 
     async def _download_segment(self, client, url, index, temp_dir):
-        """Download single segment with enhanced error handling for token expiry"""
+        """Download single segment with enhanced error handling"""
         if self.listener.is_cancelled:
             return
         
-        # Increased retry attempts for better reliability
+        # Simple retry without token refresh during segment download
+        # Token refresh happens at playlist level, not segment level
         for attempt in range(5):
             try:
                 async with client.stream(
-                    "GET", url, timeout=60.0  # Increased timeout for large segments
+                    "GET", url, timeout=60.0
                 ) as response:
                     status_code = response.status_code
                     
-                    # Detect token expiry errors specifically (403, 404, 504)
-                    if status_code in (403, 404, 504):
-                        if attempt == 4:  # Last attempt - give up
-                            error_msg = f"Token expired or segment unavailable (HTTP {status_code}) after 5 retries"
-                            LOGGER.error(f"[Vidara] {error_msg}")
-                            raise Exception(error_msg)
-                        
-                        # First token expiry detected - REFRESH TOKEN IMMEDIATELY!
-                        if attempt == 0:
-                            LOGGER.warning(
-                                f"[Vidara] ⚠️ Token expired at segment {index}, refreshing..."
-                            )
-                            
-                            try:
-                                # Get fresh token and new playlist
-                                new_seg_urls = await self._refresh_token_and_get_segments(client)
-                                
-                                if not new_seg_urls:
-                                    raise ValueError("Failed to get new segments after refresh")
-                                
-                                # Update seg_urls list
-                                self._seg_urls = new_seg_urls
-                                
-                                # Check if this segment was already downloaded successfully
-                                seg_path = os.path.join(temp_dir, f"seg_{index:05d}.ts")
-                                if os.path.exists(seg_path):
-                                    LOGGER.info(f"[Vidara] Segment {index} already exists, skipping")
-                                    self.completed_segments += 1
-                                    self.processed_bytes += os.path.getsize(seg_path)
-                                    return
-                                
-                                # Retry this same segment with new token
-                                LOGGER.info(f"[Vidara] Retrying segment {index} with fresh token...")
-                                continue
-                                
-                            except Exception as refresh_error:
-                                LOGGER.error(f"[Vidara] Token refresh failed: {refresh_error}")
-                                # If refresh fails, we can't continue - raise error
-                                raise Exception(f"Token refresh failed, cannot continue download: {refresh_error}")
-                        
-                        # Subsequent retries for this segment with same token
-                        wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8, 16s
-                        LOGGER.warning(
-                            f"[Vidara] Segment {index} failed with HTTP {status_code}, "
-                            f"retrying in {wait_time}s (attempt {attempt + 1}/5)"
-                        )
-                        await asyncio.sleep(wait_time)
-                        continue
-                    
-                    if status_code != 200:
+                    # Accept 200 (OK) and 206 (Partial Content)
+                    if status_code not in (200, 206):
                         raise Exception(
                             f"HTTP status {status_code}"
                         )
@@ -231,7 +184,7 @@ class VidaraDownloader:
                                 return
                             await f.write(chunk)
                             self.processed_bytes += len(chunk)
-                            # Update speed tracking every 1MB (1_048_576 bytes)
+                            # Update speed tracking every 1MB
                             if self.processed_bytes - self._last_bytes >= 1_048_576:
                                 current_time = time.time()
                                 time_diff = current_time - self._last_check_time
@@ -396,7 +349,7 @@ class VidaraDownloader:
                 await asyncio.sleep(2 ** attempt)
 
     async def _download_playlist(self, client, master_url, temp_dir):
-        """Download all segments with token refresh and resume capability"""
+        """Download all segments with retry capability"""
         self._master_url = master_url
         retry_count = 0
         max_retries = 3
@@ -470,7 +423,7 @@ class VidaraDownloader:
                     raise
                 
                 LOGGER.error(
-                    f"Playlist download failed (attempt {retry_count}), "
+                    f"[Vidara] Playlist download failed (attempt {retry_count}), "
                     f"completed: {self.completed_segments}/{self.total_segments}, "
                     f"error: {str(e)}. Retrying in 5s..."
                 )
@@ -482,7 +435,7 @@ class VidaraDownloader:
                         try:
                             await aioremove(seg_path)
                         except OSError as e:
-                            LOGGER.warning(f"Failed to remove segment {i}: {e}")
+                            LOGGER.warning(f"[Vidara] Failed to remove segment {i}: {e}")
                 
                 self._seg_urls = []
                 
