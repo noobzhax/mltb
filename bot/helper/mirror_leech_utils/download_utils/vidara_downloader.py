@@ -44,6 +44,9 @@ class VidaraDownloader:
         # Speed calculation tracking
         self._last_check_time = 0
         self._last_bytes = 0
+        
+        # Token refresh tracking
+        self._playlist_url_response = ""  # Store full playlist content for segment access
 
     @property
     def estimated_total_size(self):
@@ -53,6 +56,66 @@ class VidaraDownloader:
                 * self.total_segments
             )
         return 0
+
+    async def _refresh_token_and_get_segments(self, client):
+        """Get fresh token from API and refetch updated segment list"""
+        try:
+            LOGGER.info("[Vidara] 🔄 Refreshing token due to expiry...")
+            
+            # Extract filecode from original link
+            match = _ID_RE.search(self.listener.link)
+            if not match:
+                raise ValueError("Invalid Vidara URL format")
+            
+            filecode = match.group(1)
+            
+            # Call API again with fresh token
+            resp = await client.post(
+                VIDARA_API, json={"filecode": filecode}, timeout=30.0
+            )
+            
+            if resp.status_code != 200:
+                raise ValueError(f"Token refresh failed (HTTP {resp.status_code})")
+            
+            data = resp.json()
+            new_stream_url = data.get("streaming_url", "").strip()
+            
+            if not new_stream_url:
+                raise ValueError("No streaming_url in refresh response")
+            
+            LOGGER.info(f"[Vidara] ✅ Token refreshed successfully!")
+            LOGGER.info(f"[Vidara] New master URL: {new_stream_url}")
+            
+            # Update master URL with fresh token
+            old_master = self._master_url
+            self._master_url = new_stream_url
+            
+            # Fetch new playlist
+            await self._refresh_playlist(client)
+            
+            # Get all segment URLs from new playlist
+            seg_urls = []
+            for ln in self._playlist_url_response.splitlines():
+                ln = ln.strip()
+                if not ln or ln.startswith("#"):
+                    continue
+                seg_url = ln if ln.startswith("http") else (
+                    self._url_base(self._playlist_url) + "/" + ln
+                )
+                seg_urls.append(seg_url)
+            
+            self.total_segments = len(seg_urls)
+            LOGGER.info(f"[Vidara] 📊 New playlist has {self.total_segments} segments after refresh")
+            
+            # Store full playlist content for segment access
+            self._playlist_url_response = resp.text
+            
+            return seg_urls
+        
+        except Exception as e:
+            LOGGER.error(f"[Vidara] Token refresh failed: {e}")
+            raise
+
 
     async def _fetch_stream_info(self, client):
         """Call the Vidara extract API; returns dict with streaming_url,
@@ -107,15 +170,48 @@ class VidaraDownloader:
                     
                     # Detect token expiry errors specifically (403, 404, 504)
                     if status_code in (403, 404, 504):
-                        if attempt == 4:  # Last attempt
+                        if attempt == 4:  # Last attempt - give up
                             error_msg = f"Token expired or segment unavailable (HTTP {status_code}) after 5 retries"
-                            LOGGER.error(error_msg)
+                            LOGGER.error(f"[Vidara] {error_msg}")
                             raise Exception(error_msg)
                         
-                        # Token expiry detected - need to wait before retry
+                        # First token expiry detected - REFRESH TOKEN IMMEDIATELY!
+                        if attempt == 0:
+                            LOGGER.warning(
+                                f"[Vidara] ⚠️ Token expired at segment {index}, refreshing..."
+                            )
+                            
+                            try:
+                                # Get fresh token and new playlist
+                                new_seg_urls = await self._refresh_token_and_get_segments(client)
+                                
+                                if not new_seg_urls:
+                                    raise ValueError("Failed to get new segments after refresh")
+                                
+                                # Update seg_urls list
+                                self._seg_urls = new_seg_urls
+                                
+                                # Check if this segment was already downloaded successfully
+                                seg_path = os.path.join(temp_dir, f"seg_{index:05d}.ts")
+                                if os.path.exists(seg_path):
+                                    LOGGER.info(f"[Vidara] Segment {index} already exists, skipping")
+                                    self.completed_segments += 1
+                                    self.processed_bytes += os.path.getsize(seg_path)
+                                    return
+                                
+                                # Retry this same segment with new token
+                                LOGGER.info(f"[Vidara] Retrying segment {index} with fresh token...")
+                                continue
+                                
+                            except Exception as refresh_error:
+                                LOGGER.error(f"[Vidara] Token refresh failed: {refresh_error}")
+                                # If refresh fails, we can't continue - raise error
+                                raise Exception(f"Token refresh failed, cannot continue download: {refresh_error}")
+                        
+                        # Subsequent retries for this segment with same token
                         wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8, 16s
                         LOGGER.warning(
-                            f"Segment {index} failed with HTTP {status_code}, "
+                            f"[Vidara] Segment {index} failed with HTTP {status_code}, "
                             f"retrying in {wait_time}s (attempt {attempt + 1}/5)"
                         )
                         await asyncio.sleep(wait_time)
