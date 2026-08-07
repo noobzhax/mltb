@@ -172,6 +172,8 @@ class VidaraDownloader:
 
     async def _refresh_playlist(self, client):
         """Fetch media playlist with proper error handling and quality selection"""
+        LOGGER.info("[Vidara] Starting to fetch master playlist...")
+        
         # Fetch variant playlist from master
         resp = await client.get(self._master_url, timeout=30.0)
         if resp.status_code not in (200, 206):
@@ -180,16 +182,23 @@ class VidaraDownloader:
             )
         content = resp.text
         
+        LOGGER.info(f"[Vidara] Master playlist content preview:\n{content[:500]}...")
+        
         # Parse master playlist for variants
         variant_entries = []
         variant_lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
         
-        for line in variant_lines:
+        LOGGER.info(f"[Vidara] Found {len(variant_lines)} lines in master playlist")
+        
+        for i, line in enumerate(variant_lines):
             if line.startswith("http") or "/playlist/" in line.lower():
                 variant_entries.append(line)
+                LOGGER.info(f"[Vidara] Variant #{i}: {line}")
         
         if not variant_entries:
             raise ValueError("No variant playlists found in master playlist")
+        
+        LOGGER.info(f"[Vidara] Total valid variant URLs found: {len(variant_entries)}")
         
         # PREFER HIGH QUALITY FIRST: Look for keywords in URL/path
         # Try to detect quality levels (720p, 1080p, etc.)
@@ -199,11 +208,13 @@ class VidaraDownloader:
         quality_keywords = ['1080', 'hd', 'high']
         low_quality_keywords = ['low', '360', '480']
         
+        selected_reason = ""
+        
         for keyword in quality_keywords:
             for entry in variant_entries:
                 if keyword.lower() in entry.lower():
                     preferred_variant = entry
-                    LOGGER.info(f"Selected high-quality variant: {entry}")
+                    selected_reason = f"matched quality '{keyword}'"
                     break
             if preferred_variant:
                 break
@@ -218,13 +229,15 @@ class VidaraDownloader:
                         break
                 if not skip:
                     preferred_variant = entry
-                    LOGGER.info(f"Selected medium-quality variant: {preferred_variant}")
+                    selected_reason = "no low-quality variant available"
                     break
         
         # Fallback to first or last if still not selected
         if not preferred_variant:
             preferred_variant = variant_entries[-1]
-            LOGGER.warning(f"No quality detected, using last variant by default: {preferred_variant}")
+            selected_reason = "no quality detected, using last variant by default"
+        
+        LOGGER.info(f"[Vidara] Selected variant: {preferred_variant} ({selected_reason})")
         
         variant_url = preferred_variant
         playlist_url = variant_url if variant_url.startswith("http") else (
@@ -236,12 +249,13 @@ class VidaraDownloader:
         # Fetch media playlist with retry for token expiry
         for attempt in range(3):
             try:
+                LOGGER.info(f"[Vidara] Fetching media playlist (attempt {attempt+1}/3)...")
                 resp = await client.get(playlist_url, timeout=30.0)
                 if resp.status_code not in (200, 206):
                     if attempt == 2:
                         raise ValueError(f"Failed to fetch media playlist (HTTP {resp.status_code})")
                     LOGGER.warning(
-                        f"Media playlist failed (attempt {attempt+1}/3), "
+                        f"[Vidara] Media playlist failed (attempt {attempt+1}/3), "
                         f"retrying in {2**attempt}s..."
                     )
                     await asyncio.sleep(2 ** attempt)
@@ -250,7 +264,17 @@ class VidaraDownloader:
                 # Verify segment count before proceeding
                 seg_count = sum(1 for ln in resp.text.splitlines() 
                               if ln.strip() and not ln.startswith('#'))
-                LOGGER.info(f"Fetched playlist with {seg_count} segments")
+                
+                LOGGER.info(f"[Vidara] ✅ Media playlist fetched successfully!")
+                LOGGER.info(f"[Vidara] 📊 Total segments: {seg_count}")
+                
+                # Show first few segment URLs for debugging
+                segments = [ln.strip() for ln in resp.text.splitlines() 
+                          if ln.strip() and not ln.startswith('#')][:5]
+                if segments:
+                    LOGGER.info(f"[Vidara] First 5 segments:")
+                    for i, seg in enumerate(segments):
+                        LOGGER.info(f"[Vidara]   Segment {i}: {seg}")
                 
                 return resp.text
             except asyncio.TimeoutError:
@@ -292,7 +316,7 @@ class VidaraDownloader:
                 self._seg_urls = seg_urls
                 self._temp_dir = temp_dir
                 
-                LOGGER.info(f"Downloading {self.total_segments} segments (retry {retry_count + 1}/{max_retries})")
+                LOGGER.info(f"[Vidara] Downloading {self.total_segments} segments (retry {retry_count + 1}/{max_retries})")
                 
                 # Resume from last successful segment if available
                 start_index = 0
@@ -304,10 +328,10 @@ class VidaraDownloader:
                         self.processed_bytes += os.path.getsize(seg_path)
                 
                 if start_index >= self.total_segments:
-                    LOGGER.info("All segments already downloaded successfully!")
+                    LOGGER.info("[Vidara] 🎯 All segments already downloaded successfully!")
                     return
                 
-                LOGGER.info(f"Resuming from segment {start_index}/{self.total_segments}")
+                LOGGER.info(f"[Vidara] ➡️ Resuming from segment {start_index}/{self.total_segments}")
                 
                 # Download remaining segments with concurrency limit
                 sem = asyncio.Semaphore(6)  # Keep 6 parallel connections
