@@ -190,10 +190,27 @@ class VidaraDownloader:
         
         LOGGER.info(f"[Vidara] Found {len(variant_lines)} lines in master playlist")
         
+        # Build base URL for resolving relative paths
+        from urllib.parse import urljoin
+        try:
+            base_url = self._master_url.rsplit('/', 1)[0] + '/'
+        except:
+            base_url = None
+        
         for i, line in enumerate(variant_lines):
-            if line.startswith("http") or "/playlist/" in line.lower():
-                variant_entries.append(line)
-                LOGGER.info(f"[Vidara] Variant #{i}: {line}")
+            # Check if line is a playlist URL (absolute or relative)
+            is_http = line.startswith("http")
+            contains_playlist = "/playlist/" in line.lower()
+            is_relative_url = line and not line.startswith("#")  # Any non-comment line
+            
+            if is_http or contains_playlist or is_relative_url:
+                # If it's a relative URL, convert to absolute
+                actual_url = line
+                if is_relative_url and not is_http and base_url:
+                    actual_url = urljoin(base_url, line)
+                
+                variant_entries.append(actual_url)
+                LOGGER.info(f"[Vidara] Variant #{i}: {actual_url}")
         
         if not variant_entries:
             raise ValueError("No variant playlists found in master playlist")
