@@ -578,36 +578,24 @@ class VidaraDownloader:
                     )
                     return
 
-            # concat semua segmen TS -> output.ts, lalu remux ke mp4
+            # Concatenate segments using byte merge (more reliable than ffmpeg concat)
             out_ts = os.path.join(temp_dir, "output.ts")
-            concat_list = os.path.join(temp_dir, "concat.txt")
-            with open(concat_list, "w") as f:
+            
+            LOGGER.info("[Vidara] Merging all segments by byte copy...")
+            with open(out_ts, "wb") as out_f:
                 for i in range(self.total_segments):
-                    f.write(f"file 'seg_{i:05d}.ts'\n")
-
-            concat_cmd = [
-                "ffmpeg",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                concat_list,
-                "-c",
-                "copy",
-                out_ts,
-            ]
-            res_out, res_err, code = await cmd_exec(concat_cmd)
-            if code != 0:
-                raise ValueError(
-                    f"ffmpeg concat failed (code {code}). Stderr: {res_err}"
-                )
-            for i in range(self.total_segments):
-                seg = os.path.join(temp_dir, f"seg_{i:05d}.ts")
-                if os.path.exists(seg):
-                    await aioremove(seg)
-
+                    seg = os.path.join(temp_dir, f"seg_{i:05d}.ts")
+                    if os.path.exists(seg):
+                        with open(seg, "rb") as f:
+                            out_f.write(f.read())
+                    else:
+                        LOGGER.warning(f"[Vidara] Missing segment {i}")
+            
+            merged_size = os.path.getsize(out_ts) / 1e6
+            LOGGER.info(f"[Vidara] Merged file size: {merged_size:.1f} MB")
+            
+            # No need to delete individual segments yet - will do after cleanup
+            
             out_path = os.path.join(temp_dir, "output.mp4")
             remux_cmd = [
                 "ffmpeg",
