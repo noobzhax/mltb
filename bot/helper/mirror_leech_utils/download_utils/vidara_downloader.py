@@ -37,6 +37,9 @@ class VidaraDownloader:
         self.gid = token_urlsafe(10)
         self.name = ""
         self.filecode = ""
+        self._master_url = ""
+        self._playlist_url = ""
+        self._seg_urls = []
 
     @property
     def estimated_total_size(self):
@@ -86,17 +89,39 @@ class VidaraDownloader:
         return data
 
     async def _download_segment(self, client, url, index, temp_dir):
+        """Download single segment with enhanced error handling for token expiry"""
         if self.listener.is_cancelled:
             return
-        for attempt in range(3):
+        
+        # Increased retry attempts for better reliability
+        for attempt in range(5):
             try:
                 async with client.stream(
-                    "GET", url, timeout=30.0
+                    "GET", url, timeout=60.0  # Increased timeout for large segments
                 ) as response:
-                    if response.status_code not in (200, 206):
-                        raise Exception(
-                            f"HTTP status {response.status_code}"
+                    status_code = response.status_code
+                    
+                    # Detect token expiry errors specifically (403, 404, 504)
+                    if status_code in (403, 404, 504):
+                        if attempt == 4:  # Last attempt
+                            error_msg = f"Token expired or segment unavailable (HTTP {status_code}) after 5 retries"
+                            LOGGER.error(error_msg)
+                            raise Exception(error_msg)
+                        
+                        # Token expiry detected - need to wait before retry
+                        wait_time = 2 ** attempt  # Exponential backoff: 2, 4, 8, 16s
+                        LOGGER.warning(
+                            f"Segment {index} failed with HTTP {status_code}, "
+                            f"retrying in {wait_time}s (attempt {attempt + 1}/5)"
                         )
+                        await asyncio.sleep(wait_time)
+                        continue
+                    
+                    if status_code != 200:
+                        raise Exception(
+                            f"HTTP status {status_code}"
+                        )
+                    
                     file_path = os.path.join(temp_dir, f"seg_{index:05d}.ts")
                     async with aiofiles.open(file_path, "wb") as f:
                         async for chunk in response.aiter_bytes(
@@ -106,11 +131,23 @@ class VidaraDownloader:
                                 return
                             await f.write(chunk)
                             self.processed_bytes += len(chunk)
-                return
-            except Exception as e:
-                if attempt == 2:
+                    return
+            except asyncio.TimeoutError:
+                if attempt == 4:
                     raise
-                await asyncio.sleep(2 * (attempt + 1))
+                wait_time = 2 ** attempt
+                LOGGER.warning(
+                    f"Segment {index} timeout, retrying in {wait_time}s"
+                )
+                await asyncio.sleep(wait_time)
+            except Exception as e:
+                if attempt == 4:
+                    raise
+                wait_time = 2 ** attempt
+                LOGGER.warning(
+                    f"Segment {index} failed: {str(e)}, retrying in {wait_time}s"
+                )
+                await asyncio.sleep(wait_time)
 
     @staticmethod
     def _url_base(url):
@@ -120,8 +157,10 @@ class VidaraDownloader:
         path = parts.path.rsplit("/", 1)[0]
         return f"{parts.scheme}://{parts.netloc}{path}"
 
-    async def _download_playlist(self, client, master_url, temp_dir):
-        resp = await client.get(master_url, timeout=20.0)
+    async def _refresh_playlist(self, client):
+        """Fetch media playlist with proper error handling for token expiry"""
+        # Fetch variant playlist from master
+        resp = await client.get(self._master_url, timeout=30.0)
         if resp.status_code not in (200, 206):
             raise ValueError(
                 f"Failed to fetch master playlist (HTTP {resp.status_code})"
@@ -133,37 +172,124 @@ class VidaraDownloader:
         variant_url = variant_lines[-1] if variant_lines else ""
 
         playlist_url = variant_url if variant_url.startswith("http") else (
-            self._url_base(master_url) + "/" + variant_url
+            self._url_base(self._master_url) + "/" + variant_url
         )
-        resp = await client.get(playlist_url, timeout=20.0)
-        if resp.status_code not in (200, 206):
-            raise ValueError(f"Failed to fetch media playlist (HTTP {resp.status_code})")
+        
+        self._playlist_url = playlist_url
+        
+        # Fetch media playlist with retry for token expiry
+        for attempt in range(3):
+            try:
+                resp = await client.get(playlist_url, timeout=30.0)
+                if resp.status_code not in (200, 206):
+                    if attempt == 2:
+                        raise ValueError(f"Failed to fetch media playlist (HTTP {resp.status_code})")
+                    LOGGER.warning(
+                        f"Media playlist failed (attempt {attempt+1}/3), "
+                        f"retrying in {2**attempt}s..."
+                    )
+                    await asyncio.sleep(2 ** attempt)
+                    continue
+                
+                return resp.text
+            except asyncio.TimeoutError:
+                if attempt == 2:
+                    raise
+                await asyncio.sleep(2 ** attempt)
 
-        seg_urls = []
-        seg_base = self._url_base(playlist_url)
-        for ln in resp.text.splitlines():
-            ln = ln.strip()
-            if not ln or ln.startswith("#"):
-                continue
-            seg_urls.append(
-                ln if ln.startswith("http") else seg_base + "/" + ln
-            )
-        if not seg_urls:
-            raise ValueError("No segments found in media playlist")
-
-        self.total_segments = len(seg_urls)
-        self.completed_segments = 0
-
-        sem = asyncio.Semaphore(6)
-        self._temp_dir = temp_dir
-
-        async def worker(url, idx):
-            async with sem:
-                await self._download_segment(client, url, idx, temp_dir)
-                self.completed_segments += 1
-
-        await asyncio.gather(*(worker(u, i) for i, u in enumerate(seg_urls)))
-        self._seg_urls = seg_urls
+    async def _download_playlist(self, client, master_url, temp_dir):
+        """Download all segments with token refresh and resume capability"""
+        self._master_url = master_url
+        retry_count = 0
+        max_retries = 3
+        
+        while retry_count < max_retries:
+            try:
+                # Reset tracking for this retry attempt
+                self.completed_segments = 0
+                self.processed_bytes = 0
+                
+                # Fetch fresh playlist (handles token expiry)
+                playlist_content = await self._refresh_playlist(client)
+                if not playlist_content:
+                    raise ValueError("Failed to fetch playlist content")
+                
+                seg_urls = []
+                seg_base = self._url_base(self._playlist_url)
+                for ln in playlist_content.splitlines():
+                    ln = ln.strip()
+                    if not ln or ln.startswith("#"):
+                        continue
+                    seg_urls.append(
+                        ln if ln.startswith("http") else seg_base + "/" + ln
+                    )
+                
+                if not seg_urls:
+                    raise ValueError("No segments found in media playlist")
+                
+                self.total_segments = len(seg_urls)
+                self._seg_urls = seg_urls
+                self._temp_dir = temp_dir
+                
+                LOGGER.info(f"Downloading {self.total_segments} segments (retry {retry_count + 1}/{max_retries})")
+                
+                # Resume from last successful segment if available
+                start_index = 0
+                for i in range(len(seg_urls)):
+                    seg_path = os.path.join(temp_dir, f"seg_{i:05d}.ts")
+                    if os.path.exists(seg_path):
+                        start_index = i + 1
+                        self.completed_segments += 1
+                        self.processed_bytes += os.path.getsize(seg_path)
+                
+                if start_index >= self.total_segments:
+                    LOGGER.info("All segments already downloaded successfully!")
+                    return
+                
+                LOGGER.info(f"Resuming from segment {start_index}/{self.total_segments}")
+                
+                # Download remaining segments with concurrency limit
+                sem = asyncio.Semaphore(6)  # Keep 6 parallel connections
+                
+                async def worker(url, idx):
+                    async with sem:
+                        await self._download_segment(client, url, idx, temp_dir)
+                        if not self.listener.is_cancelled:
+                            self.completed_segments += 1
+                
+                # Only download missing segments (resume capability)
+                await asyncio.gather(*(
+                    worker(u, i + start_index) 
+                    for i, u in enumerate(seg_urls[start_index:])
+                ))
+                
+                # Success - exit retry loop
+                break
+                
+            except Exception as e:
+                retry_count += 1
+                if retry_count >= max_retries:
+                    raise
+                
+                LOGGER.error(
+                    f"Playlist download failed (attempt {retry_count}), "
+                    f"completed: {self.completed_segments}/{self.total_segments}, "
+                    f"error: {str(e)}. Retrying in 5s..."
+                )
+                
+                # Clean up partial downloads before retry
+                for i in range(len(seg_urls)):
+                    seg_path = os.path.join(temp_dir, f"seg_{i:05d}.ts")
+                    if os.path.exists(seg_path):
+                        try:
+                            await aioremove(seg_path)
+                        except OSError as e:
+                            LOGGER.warning(f"Failed to remove segment {i}: {e}")
+                
+                self._seg_urls = []
+                
+                # Wait before retry
+                await asyncio.sleep(5)
 
     async def _make_thumbnail(self, video_path, thumb_path):
         """Snapshot 9 frames (3 from start zone, 3 from middle, 3 from end),
@@ -271,7 +397,7 @@ class VidaraDownloader:
 
         try:
             async with AsyncClient(
-                verify=False, follow_redirects=True, timeout=30.0
+                verify=False, follow_redirects=True, timeout=60.0
             ) as client:
                 info = await self._fetch_stream_info(client)
                 if self.listener.is_cancelled:
@@ -287,6 +413,15 @@ class VidaraDownloader:
 
                 await self._download_playlist(client, master_url, temp_dir)
                 if self.listener.is_cancelled:
+                    return
+                
+                # Verify all segments were downloaded successfully
+                if hasattr(self, 'total_segments') and self.completed_segments < self.total_segments:
+                    missing = self.total_segments - self.completed_segments
+                    await self.listener.on_download_error(
+                        f"Download incomplete: {missing} segments missing "
+                        f"({self.completed_segments}/{self.total_segments})"
+                    )
                     return
 
             # concat semua segmen TS -> output.ts, lalu remux ke mp4
