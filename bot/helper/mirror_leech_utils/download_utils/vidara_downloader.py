@@ -171,7 +171,7 @@ class VidaraDownloader:
         return f"{parts.scheme}://{parts.netloc}{path}"
 
     async def _refresh_playlist(self, client):
-        """Fetch media playlist with proper error handling for token expiry"""
+        """Fetch media playlist with proper error handling and quality selection"""
         # Fetch variant playlist from master
         resp = await client.get(self._master_url, timeout=30.0)
         if resp.status_code not in (200, 206):
@@ -179,11 +179,54 @@ class VidaraDownloader:
                 f"Failed to fetch master playlist (HTTP {resp.status_code})"
             )
         content = resp.text
-        variant_lines = [
-            ln.strip() for ln in content.splitlines() if ln.strip()
-        ]
-        variant_url = variant_lines[-1] if variant_lines else ""
-
+        
+        # Parse master playlist for variants
+        variant_entries = []
+        variant_lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+        
+        for line in variant_lines:
+            if line.startswith("http") or "/playlist/" in line.lower():
+                variant_entries.append(line)
+        
+        if not variant_entries:
+            raise ValueError("No variant playlists found in master playlist")
+        
+        # PREFER HIGH QUALITY FIRST: Look for keywords in URL/path
+        # Try to detect quality levels (720p, 1080p, etc.)
+        preferred_variant = None
+        
+        # Priority order: 1080p > 720p > 480p > other > last fallback
+        quality_keywords = ['1080', 'hd', 'high']
+        low_quality_keywords = ['low', '360', '480']
+        
+        for keyword in quality_keywords:
+            for entry in variant_entries:
+                if keyword.lower() in entry.lower():
+                    preferred_variant = entry
+                    LOGGER.info(f"Selected high-quality variant: {entry}")
+                    break
+            if preferred_variant:
+                break
+        
+        # If no high quality found, try to avoid low quality
+        if not preferred_variant:
+            for entry in variant_entries:
+                skip = False
+                for low_kw in low_quality_keywords:
+                    if low_kw.lower() in entry.lower():
+                        skip = True
+                        break
+                if not skip:
+                    preferred_variant = entry
+                    LOGGER.info(f"Selected medium-quality variant: {preferred_variant}")
+                    break
+        
+        # Fallback to first or last if still not selected
+        if not preferred_variant:
+            preferred_variant = variant_entries[-1]
+            LOGGER.warning(f"No quality detected, using last variant by default: {preferred_variant}")
+        
+        variant_url = preferred_variant
         playlist_url = variant_url if variant_url.startswith("http") else (
             self._url_base(self._master_url) + "/" + variant_url
         )
@@ -203,6 +246,11 @@ class VidaraDownloader:
                     )
                     await asyncio.sleep(2 ** attempt)
                     continue
+                
+                # Verify segment count before proceeding
+                seg_count = sum(1 for ln in resp.text.splitlines() 
+                              if ln.strip() and not ln.startswith('#'))
+                LOGGER.info(f"Fetched playlist with {seg_count} segments")
                 
                 return resp.text
             except asyncio.TimeoutError:
