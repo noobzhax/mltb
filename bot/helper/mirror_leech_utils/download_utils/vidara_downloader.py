@@ -59,6 +59,7 @@ class VidaraDownloader:
 
     async def _refresh_token_and_get_segments(self, client):
         """Get fresh token from API and refetch updated segment list"""
+        seg_urls = []  # ← Initialize here to avoid UnboundLocalError
         try:
             LOGGER.info("[Vidara] 🔄 Refreshing token due to expiry...")
             
@@ -353,6 +354,7 @@ class VidaraDownloader:
         self._master_url = master_url
         retry_count = 0
         max_retries = 3
+        seg_urls = []  # Initialize to avoid UnboundLocalError
         
         while retry_count < max_retries:
             try:
@@ -434,8 +436,8 @@ class VidaraDownloader:
                     if os.path.exists(seg_path):
                         try:
                             await aioremove(seg_path)
-                        except OSError as e:
-                            LOGGER.warning(f"[Vidara] Failed to remove segment {i}: {e}")
+                        except OSError as ex:
+                            LOGGER.warning(f"[Vidara] Failed to remove segment {i}: {ex}")
                 
                 self._seg_urls = []
                 
@@ -443,8 +445,8 @@ class VidaraDownloader:
                 await asyncio.sleep(5)
 
     async def _make_thumbnail(self, video_path, thumb_path):
-        """Snapshot 9 frames (3 from start zone, 3 from middle, 3 from end),
-        draw a small timestamp on each, tile into a tight 3x3 grid.
+        """Snapshot 16 frames (4 per zone across 4 zones),
+        draw a small timestamp on each, tile into a tight 4x4 grid.
         Used only for leech."""
         try:
             out, err, code = await cmd_exec(
@@ -455,17 +457,18 @@ class VidaraDownloader:
             if duration <= 0:
                 return None
 
-            # 3 zones: start 5-25%, middle 40-60%, end 75-95%
+            # 4 zones: start 3-20%, lower-mid 28-43%, upper-mid 55-70%, end 78-95%
             def _zone_random(lo_pct, hi_pct):
                 lo, hi = duration * lo_pct, duration * hi_pct
-                return sorted(random.uniform(lo, hi) for _ in range(3))
+                return sorted(random.uniform(lo, hi) for _ in range(4))
 
             picks = (
-                _zone_random(0.05, 0.25)
-                + _zone_random(0.40, 0.60)
-                + _zone_random(0.75, 0.95)
+                _zone_random(0.03, 0.20)
+                + _zone_random(0.28, 0.43)
+                + _zone_random(0.55, 0.70)
+                + _zone_random(0.78, 0.95)
             )
-            if len(picks) != 9 or any(p <= 0 or p >= duration for p in picks):
+            if len(picks) != 16 or any(p <= 0 or p >= duration for p in picks):
                 return None
 
             tmp_dir = os.path.join(os.path.dirname(thumb_path), "frames")
@@ -477,8 +480,6 @@ class VidaraDownloader:
                 h, rem = divmod(int(t), 3600)
                 m, s = divmod(rem, 60)
                 ts = f"{h:02d}:{m:02d}:{s:02d}"
-                # write text to file and use textfile= to avoid filter
-                # parsing issues with ':' in text= (ffmpeg 8 is stricter)
                 ts_file = os.path.join(tmp_dir, f"ts{i}.txt")
                 with open(ts_file, "w") as f:
                     f.write(ts)
@@ -498,27 +499,30 @@ class VidaraDownloader:
                     await aioremove(ts_file)
                 except OSError:
                     pass
-            frames = [os.path.join(tmp_dir, f"f{i}.jpg") for i in range(9)]
+            frames = [os.path.join(tmp_dir, f"f{i}.jpg") for i in range(16)]
             if not all(os.path.exists(f) for f in frames):
                 return None
 
-            # tight 3x3 grid (no gap; scale to uniform height — ffmpeg 6.x
-            # hstack requires same height; `gap` option unsupported)
-            out, err, code = await cmd_exec(
-                [
-                    "ffmpeg", "-y",
-                    "-i", frames[0], "-i", frames[1], "-i", frames[2],
-                    "-i", frames[3], "-i", frames[4], "-i", frames[5],
-                    "-i", frames[6], "-i", frames[7], "-i", frames[8],
-                    "-filter_complex",
-                    "[0]scale=360:-1[a0];[1]scale=360:-1[a1];[2]scale=360:-1[a2];"
-                    "[3]scale=360:-1[a3];[4]scale=360:-1[a4];[5]scale=360:-1[a5];"
-                    "[6]scale=360:-1[a6];[7]scale=360:-1[a7];[8]scale=360:-1[a8];"
-                    "[a0][a1][a2]hstack=3[r0];[a3][a4][a5]hstack=3[r1];"
-                    "[a6][a7][a8]hstack=3[r2];[r0][r1][r2]vstack=3",
-                    "-q:v", "2", thumb_path,
-                ]
-            )
+            # tight 4x4 grid (no gap; scale to uniform height)
+            # build scale inputs + 4 hstack rows + 1 vstack
+            scale_parts = []
+            hstack_rows = []
+            for row in range(4):
+                inputs = []
+                for col in range(4):
+                    idx = row * 4 + col
+                    scale_parts.append(f"[{idx}]scale=360:-1[a{idx}]")
+                    inputs.append(f"[a{idx}]")
+                hstack_rows.append(f"{''.join(inputs)}hstack=4[r{row}]")
+            vstack_inputs = "".join(f"[r{row}]" for row in range(4))
+            filter_complex = ";".join(scale_parts) + ";" + ";".join(hstack_rows) + ";" + vstack_inputs + "vstack=4"
+
+            cmd = ["ffmpeg", "-y"]
+            for f in frames:
+                cmd += ["-i", f]
+            cmd += ["-filter_complex", filter_complex, "-q:v", "2", thumb_path]
+
+            out, err, code = await cmd_exec(cmd)
             for f in frames:
                 try:
                     await aioremove(f)
@@ -627,7 +631,10 @@ class VidaraDownloader:
             await rmtree(temp_dir, ignore_errors=True)
 
         if self.listener.is_cancelled:
-            await aioremove(final_path, ignore_errors=True)
+            try:
+                await aioremove(final_path)
+            except OSError:
+                pass
             return
 
         if not self.name:
