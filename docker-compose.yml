@@ -2,5 +2,5 @@ services:
   app:
     build: .
     command: bash start.sh
-    restart: on-failure
+    restart: unless-stopped
     network_mode: "host"

@@ -19,7 +19,9 @@ from ...mirror_leech_utils.status_utils.queue_status import QueueStatus
 from ...mirror_leech_utils.status_utils.vidara_status import VidaraStatus
 from ...telegram_helper.message_utils import send_status_message
 
-VIDARA_API = "https://vidara-api.pakai.eu.org/api/extract"
+VIDARA_DIRECT_API = "https://vidara.so/api/stream"
+VIDARA_API = "https://vidara-api.pakai.eu.org/api/extract"  # fallback only
+VIDARA_PAGE_TIMEOUT = 10.0
 
 _ID_RE = re.compile(r"vidara\.[a-zA-Z0-9.-]+/(?:[a-zA-Z0-9]+/)*([a-zA-Z0-9]+)")
 
@@ -70,16 +72,19 @@ class VidaraDownloader:
             
             filecode = match.group(1)
             
-            # Call API again with fresh token
-            resp = await client.post(
-                VIDARA_API, json={"filecode": filecode}, timeout=30.0
-            )
-            
-            if resp.status_code != 200:
-                raise ValueError(f"Token refresh failed (HTTP {resp.status_code})")
-            
-            data = resp.json()
-            new_stream_url = data.get("streaming_url", "").strip()
+            # Mint on this host so the new token is bound to our IP (same
+            # IP-bound-token reason as _fetch_stream_info).
+            try:
+                data = await self._fetch_via_direct(client, filecode)
+            except Exception:
+                # direct not reachable from here — fall back to hosted API
+                resp = await client.post(
+                    VIDARA_API, json={"filecode": filecode}, timeout=30.0
+                )
+                if resp.status_code != 200:
+                    raise ValueError(f"Token refresh failed (HTTP {resp.status_code})")
+                data = resp.json()
+            new_stream_url = (data.get("streaming_url") or "").strip()
             
             if not new_stream_url:
                 raise ValueError("No streaming_url in refresh response")
@@ -88,10 +93,9 @@ class VidaraDownloader:
             LOGGER.info(f"[Vidara] New master URL: {new_stream_url}")
             
             # Update master URL with fresh token
-            old_master = self._master_url
             self._master_url = new_stream_url
             
-            # Fetch new playlist
+            # Fetch new playlist (sets self._playlist_url + self._playlist_url_response)
             await self._refresh_playlist(client)
             
             # Get all segment URLs from new playlist
@@ -108,9 +112,6 @@ class VidaraDownloader:
             self.total_segments = len(seg_urls)
             LOGGER.info(f"[Vidara] 📊 New playlist has {self.total_segments} segments after refresh")
             
-            # Store full playlist content for segment access
-            self._playlist_url_response = resp.text
-            
             return seg_urls
         
         except Exception as e:
@@ -118,43 +119,95 @@ class VidaraDownloader:
             raise
 
 
+    async def _fetch_via_hosted_api(self, client, filecode):
+        resp = await client.post(
+            VIDARA_API, json={"filecode": filecode}, timeout=30.0
+        )
+        if resp.status_code != 200:
+            raise ValueError(f"Vidara API error (HTTP {resp.status_code})")
+        try:
+            data = resp.json()
+        except Exception:
+            raise ValueError("Vidara API returned invalid JSON")
+        if not isinstance(data, dict):
+            raise ValueError("Vidara API returned unexpected payload")
+        return data
+
+    async def _fetch_via_direct(self, client, filecode):
+        """Call vidara.so/api/stream straight from this host.
+
+        CDN HLS tokens are bound to the IP that requested them. The hosted extract
+        API mints tokens for its own egress IP (Vercel), so fetching the master
+        playlist from here returns `x-token-status: denied`. Minting here keeps
+        the token valid for the same host that will download the segments."""
+        resp = await client.post(
+            VIDARA_DIRECT_API,
+            json={"filecode": filecode, "device": "web"},
+            headers={
+                "Referer": "https://vidara.so/",
+                "Origin": "https://vidara.so",
+            },
+            timeout=30.0,
+        )
+        if resp.status_code != 200:
+            raise ValueError(f"Vidara error (HTTP {resp.status_code})")
+        try:
+            data = resp.json()
+        except Exception:
+            raise ValueError("Vidara returned invalid JSON")
+        if not isinstance(data, dict):
+            raise ValueError("Vidara returned unexpected payload")
+        if not (data.get("streaming_url") or "").strip():
+            raise ValueError("No streaming_url returned by Vidara")
+
+        # Same shape the hosted API returns, so callers don't branch.
+        return {
+            "success": True,
+            "filecode": filecode,
+            "title": data.get("title") or "",
+            "thumbnail": data.get("thumbnail") or None,
+            "subtitles": data.get("subtitles") or None,
+            "default_sub_lang": data.get("default_sub_lang") or None,
+            "streaming_url": (data.get("streaming_url") or "").strip(),
+        }
+
     async def _fetch_stream_info(self, client):
-        """Call the Vidara extract API; returns dict with streaming_url,
-        title, thumbnail, subtitles. Raises ValueError with a user-friendly
-        message on any failure."""
+        """Resolve the HLS URL, preferring a token minted on this host.
+
+        Direct call first; the hosted extract API is only a fallback for when
+        vidara.so/api/stream is unreachable from here."""
         match = _ID_RE.search(self.listener.link)
         if not match:
             raise ValueError("Invalid Vidara URL format")
         filecode = match.group(1)
         self.filecode = filecode
 
-        try:
-            resp = await client.post(
-                VIDARA_API, json={"filecode": filecode}, timeout=30.0
-            )
-        except Exception as e:
-            raise ValueError(f"Vidara API unreachable: {e}")
+        last_err = None
+        for how, call in (
+            ("direct", self._fetch_via_direct),
+            ("hosted API", self._fetch_via_hosted_api),
+        ):
+            try:
+                data = await call(client, filecode)
+            except ValueError as e:
+                last_err = e
+                LOGGER.warning(f"[Vidara] {how} failed: {e}")
+                continue
+            except Exception as e:
+                last_err = ValueError(f"Vidara unreachable via {how}: {e}")
+                LOGGER.warning(f"[Vidara] {how} unreachable: {e}")
+                continue
 
-        if resp.status_code != 200:
-            raise ValueError(
-                f"Vidara API error (HTTP {resp.status_code})"
-            )
+            if not (data.get("streaming_url") or "").strip():
+                last_err = ValueError(
+                    "No streaming_url returned by Vidara — video may be private or expired"
+                )
+                continue
 
-        try:
-            data = resp.json()
-        except Exception:
-            raise ValueError("Vidara API returned invalid JSON")
+            LOGGER.info(f"[Vidara] Token minted via {how}")
+            return data
 
-        if not isinstance(data, dict):
-            raise ValueError("Vidara API returned unexpected payload")
-
-        stream_url = (data.get("streaming_url") or "").strip()
-        if not stream_url:
-            raise ValueError(
-                "No streaming_url returned by Vidara API — video may be private or expired"
-            )
-
-        return data
+        raise last_err or ValueError("Vidara extraction failed")
 
     async def _download_segment(self, client, url, index, temp_dir):
         """Download single segment with enhanced error handling"""
@@ -223,13 +276,47 @@ class VidaraDownloader:
     async def _refresh_playlist(self, client):
         """Fetch media playlist with proper error handling and quality selection"""
         LOGGER.info("[Vidara] Starting to fetch master playlist...")
-        
-        # Fetch variant playlist from master
-        resp = await client.get(self._master_url, timeout=30.0)
+
+        # Fetch variant playlist from master — retry once on 404 in case of
+        # API cache lag; if still 404, surface user-friendly message
+        # Also handle IP-bound tokens (x-token-status: denied) by refreshing token once
+        resp = None  # type: ignore[assignment]
+        for attempt in range(2):
+            resp = await client.get(self._master_url, timeout=30.0)
+            if resp.status_code in (200, 206):
+                break
+            token_denied = resp.headers.get("x-token-status", "").lower() == "denied"
+            if resp.status_code == 404 and attempt == 0:
+                if token_denied:
+                    LOGGER.warning("[Vidara] Master denied (IP-bound token). Refreshing token...")
+                    try:
+                        new_urls = await self._refresh_token_and_get_segments(client)
+                        # _refresh_token_and_get_segments updates _master_url and returns seg_urls
+                        # but _refresh_playlist expects to re-derive playlist; just retry with new master
+                        LOGGER.info(f"[Vidara] Retrying master with refreshed token: {self._master_url[:80]}...")
+                    except Exception as e:
+                        LOGGER.error(f"[Vidara] Token refresh for master failed: {e}")
+                        await asyncio.sleep(3)
+                else:
+                    LOGGER.warning("[Vidara] Master 404, retrying in 3s (possible cache lag)...")
+                    await asyncio.sleep(3)
+                continue
+            break
+        assert resp is not None  # loop always runs
         if resp.status_code not in (200, 206):
-            raise ValueError(
-                f"Failed to fetch master playlist (HTTP {resp.status_code})"
-            )
+            if resp.status_code == 404:
+                tok_status = resp.headers.get("x-token-status", "")
+                if tok_status.lower() == "denied":
+                    raise ValueError(
+                        "Master playlist denied by CDN (IP-bound token, x-token-status: denied). "
+                        "The API issued a token bound to its own egress IP. Fix: redeploy vidara-api "
+                        "without IP binding or proxy the HLS via the API."
+                    )
+                raise ValueError(
+                    "Master playlist not found (HTTP 404) — video likely deleted/expired on Vidara "
+                    "(API returned a URL but CDN has no file). Coba link lain."
+                )
+            raise ValueError(f"Failed to fetch master playlist (HTTP {resp.status_code})")
         content = resp.text
         
         LOGGER.info(f"[Vidara] Master playlist content preview:\n{content[:500]}...")
