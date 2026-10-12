@@ -558,7 +558,8 @@ class VidaraDownloader:
             if len(picks) != 16 or any(p <= 0 or p >= duration for p in picks):
                 return None
 
-            tmp_dir = os.path.join(os.path.dirname(thumb_path), "frames")
+            # isolate per task — shared "frames" caused thumbnail mixing when 2 Vidara jobs ran concurrently
+            tmp_dir = os.path.join(os.path.dirname(thumb_path), f"frames_{self.filecode}_{self.gid}")
             await makedirs(tmp_dir, exist_ok=True)
             font = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
 
@@ -735,7 +736,7 @@ class VidaraDownloader:
         if getattr(self.listener, "is_leech", False):
             thumb_dir = "/tmp/vidara_thumbs"
             await makedirs(thumb_dir, exist_ok=True)
-            thumb_path = os.path.join(thumb_dir, f"{self.filecode}_thumb.jpg")
+            thumb_path = os.path.join(thumb_dir, f"{self.filecode}_{self.gid}_thumb.jpg")
             thumb = await self._make_thumbnail(final_path, thumb_path)
             if thumb:
                 self.listener.thumb = thumb
