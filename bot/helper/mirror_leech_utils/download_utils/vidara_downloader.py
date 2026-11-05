@@ -22,8 +22,13 @@ from ...telegram_helper.message_utils import send_status_message
 VIDARA_DIRECT_API = "https://vidara.so/api/stream"
 VIDARA_API = "https://vidara-api.pakai.eu.org/api/extract"  # fallback only
 VIDARA_PAGE_TIMEOUT = 10.0
+VIDARA_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 _ID_RE = re.compile(r"vidara\.[a-zA-Z0-9.-]+/(?:[a-zA-Z0-9]+/)*([a-zA-Z0-9]+)")
+_TITLE_RE = re.compile(r"<title>([^<]*)</title>", re.I)
 
 
 class VidaraDownloader:
@@ -171,6 +176,24 @@ class VidaraDownloader:
             "streaming_url": (data.get("streaming_url") or "").strip(),
         }
 
+    async def _fetch_page_title(self, client, filecode):
+        """Watch page carries the real name; /api/stream often leaves title
+        empty (then the file would land as `{filecode}.mp4`)."""
+        try:
+            resp = await client.get(
+                f"https://vidara.so/v/{filecode}",
+                headers={"User-Agent": VIDARA_UA},
+                timeout=VIDARA_PAGE_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                return ""
+            match = _TITLE_RE.search(resp.text)
+            title = (match.group(1) if match else "").strip()
+            return re.sub(r"^watch\s+", "", title, flags=re.I).strip()
+        except Exception as e:
+            LOGGER.warning(f"[Vidara] page title fetch failed: {e}")
+            return ""
+
     async def _fetch_stream_info(self, client):
         """Resolve the HLS URL, preferring a token minted on this host.
 
@@ -205,6 +228,10 @@ class VidaraDownloader:
                 continue
 
             LOGGER.info(f"[Vidara] Token minted via {how}")
+            if not (data.get("title") or "").strip():
+                data["title"] = await self._fetch_page_title(client, filecode)
+                if data["title"]:
+                    LOGGER.info(f"[Vidara] Title from watch page: {data['title']}")
             return data
 
         raise last_err or ValueError("Vidara extraction failed")
@@ -639,7 +666,7 @@ class VidaraDownloader:
 
         temp_dir = os.path.join(self._path, "_vidara_temp")
         await makedirs(temp_dir, exist_ok=True)
-        final_path = os.path.join(self._path, f"{filecode}.mp4")
+        final_path = os.path.join(self._path, f"Vidara_{filecode}.mp4")
 
         try:
             async with AsyncClient(
@@ -652,9 +679,11 @@ class VidaraDownloader:
 
                 title = (info.get("title") or "").strip()
                 if title:
-                    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title).strip()
+                    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title).strip()[:120]
                     if safe_title:
-                        final_path = os.path.join(self._path, f"{safe_title}.mp4")
+                        final_path = os.path.join(
+                            self._path, f"{safe_title} [{filecode}].mp4"
+                        )
                         self.name = os.path.basename(final_path)
 
                 await self._download_playlist(client, master_url, temp_dir)
