@@ -19,7 +19,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from .. import LOGGER, bot_loop, task_dict, task_dict_lock
 from ..core.config_manager import Config
 from ..core.telegram_manager import TgClient
-from ..helper.ext_utils.leech_history import filter_done, load_history
+from ..helper.ext_utils.leech_history import filter_done, link_key, load_history
 from ..helper.telegram_helper.message_utils import send_message, send_rss
 from .mirror_leech import leech
 
@@ -125,7 +125,7 @@ async def _reap():
     tries = await _read_tries()
     for link in finished:
         _inflight.pop(link, None)
-        if link in history:
+        if link_key(link) in history:
             await _append(_done_path(), link)
             tries.pop(link, None)
             LOGGER.info(f"AutoLeech done: {link}")

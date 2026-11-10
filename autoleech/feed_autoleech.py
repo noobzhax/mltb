@@ -9,10 +9,21 @@ Usage:
 Skips blanks, comments and anything already queued/done/dead, so re-running
 after a crash is safe.
 """
+import re
 import sys
 from pathlib import Path
 
 BOX = Path("/home/ubuntu/dev/mltb/autoleech")
+_VID_RE = re.compile(
+    r"^https?://(?:www\.)?vidara\.[a-z]+/(?:v/|e/)?([A-Za-z0-9]{6,})/?$", re.I
+)
+
+
+def link_key(link):
+    """Must match bot/helper/ext_utils/leech_history.link_key."""
+    link = link.strip()
+    m = _VID_RE.match(link)
+    return f"vidara:{m.group(1)}" if m else link
 
 
 def read(path):
@@ -31,9 +42,9 @@ def main(argv):
     src = [l for a in argv for l in (sys.stdin.read().splitlines() if a == "-" else read(a))]
     seen = set()
     for f in ("queue", "done", "dead", "leech_history"):
-        seen.update(x.strip() for x in read(BOX / f"{f}.txt"))
+        seen.update(link_key(x) for x in read(BOX / f"{f}.txt"))
     new = [l.strip() for l in src if l.strip() and not l.strip().startswith("#")]
-    new = [l for l in dict.fromkeys(new) if l not in seen]
+    new = [l for l in dict.fromkeys(new) if link_key(l) not in seen]
     if not new:
         print("nothing new")
         return 0
