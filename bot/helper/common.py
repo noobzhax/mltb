@@ -29,6 +29,7 @@ from ..core.config_manager import Config
 from ..core.telegram_manager import TgClient
 from .ext_utils.bot_utils import new_task, sync_to_async, get_size_bytes
 from .ext_utils.bulk_links import extract_bulk_links
+from .ext_utils.leech_history import filter_done, mark_done
 from .mirror_leech_utils.gdrive_utils.list import GoogleDriveList
 from .mirror_leech_utils.rclone_utils.list import RcloneList
 from .mirror_leech_utils.status_utils.sevenz_status import SevenZStatus
@@ -677,6 +678,19 @@ class TaskConfig:
             self.bulk = await extract_bulk_links(self.message, bulk_start, bulk_end)
             if len(self.bulk) == 0:
                 raise ValueError("Bulk Empty!")
+            fresh = await filter_done(self.bulk)
+            if not fresh:
+                await send_message(
+                    self.message,
+                    f"Semua {len(self.bulk)} link sudah pernah di-leech, skip.",
+                )
+                return
+            if len(fresh) != len(self.bulk):
+                await send_message(
+                    self.message,
+                    f"Skip {len(self.bulk) - len(fresh)} link yang sudah pernah di-leech.",
+                )
+                self.bulk = fresh
             b_msg = input_list[:1]
             self.options = input_list[1:]
             index = self.options.index("-b")

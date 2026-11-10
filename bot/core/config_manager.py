@@ -53,6 +53,11 @@ class Config:
     RCLONE_SERVE_USER = ""
     RCLONE_SERVE_PASS = ""
     RCLONE_SERVE_PORT = 8080
+    AUTOLEECH = False
+    AUTOLEECH_DIR = "/app/autoleech"
+    AUTOLEECH_CHAT = ""
+    AUTOLEECH_INTERVAL = 30
+    AUTOLEECH_MAX_TRIES = 3
     RSS_CHAT = ""
     RSS_DELAY = 600
     RSS_SIZE_LIMIT = 0

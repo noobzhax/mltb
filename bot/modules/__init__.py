@@ -25,6 +25,7 @@ from .restart import (
     confirm_restart,
 )
 from .rss import get_rss_menu, rss_listener
+from .autoleech import autoleech_status
 from .search import torrent_search, torrent_search_update, initiate_search_tools
 from .nzb_search import hydra_search
 from .services import start, ping, log
@@ -72,6 +73,7 @@ __all__ = [
     "confirm_restart",
     "get_rss_menu",
     "rss_listener",
+    "autoleech_status",
     "torrent_search",
     "torrent_search_update",
     "initiate_search_tools",

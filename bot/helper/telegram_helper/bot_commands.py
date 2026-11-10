@@ -35,6 +35,7 @@ class BotCommands:
     StatsCommand = f"stats{i}"
     HelpCommand = f"help{i}"
     LogCommand = f"log{i}"
+    AutoLeechCommand = f"autoleech{i}"
     ShellCommand = f"shell{i}"
     AExecCommand = f"aexec{i}"
     ExecCommand = f"exec{i}"

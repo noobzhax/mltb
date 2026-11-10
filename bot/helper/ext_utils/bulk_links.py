@@ -18,7 +18,7 @@ async def get_links_from_file(message):
     text_file_dir = await message.download()
     async with aiopen(text_file_dir, "r+") as f:
         lines = await f.readlines()
-        links_list.extend(line.strip() for line in lines if len(line) != 0)
+        links_list.extend(line.strip() for line in lines if line.strip())
     await remove(text_file_dir)
     return links_list
 
@@ -32,4 +32,8 @@ async def extract_bulk_links(message, bulk_start, bulk_end):
             links_list = await get_links_from_file(reply_to)
         elif text := reply_to.text:
             links_list = get_links_from_message(text)
-    return filter_links(links_list, bulk_start, bulk_end) if links_list else links_list
+    if not links_list:
+        return links_list
+    # Dedupe before slicing so -b start:end keeps stable indexes.
+    links_list = list(dict.fromkeys(links_list))
+    return filter_links(links_list, bulk_start, bulk_end)

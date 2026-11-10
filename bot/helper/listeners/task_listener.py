@@ -21,6 +21,7 @@ from ...core.torrent_manager import TorrentManager
 from ..common import TaskConfig
 from ..ext_utils.bot_utils import sync_to_async
 from ..ext_utils.db_handler import database
+from ..ext_utils.leech_history import mark_done
 from ..ext_utils.files_utils import (
     get_path_size,
     clean_download,
@@ -356,6 +357,8 @@ class TaskListener(TaskConfig):
             and Config.DATABASE_URL
         ):
             await database.rm_complete_task(self.message.link)
+        if self.is_leech and self.link and not self.is_rss:
+            await mark_done(self.link)
         msg = f"<b>Name: </b><code>{escape(self.name)}</code>\n\n<b>Size: </b>{get_readable_file_size(self.size)}"
         LOGGER.info(f"Task Done: {self.name}")
         if self.is_leech:

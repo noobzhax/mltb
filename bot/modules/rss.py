@@ -787,8 +787,8 @@ Timeout: 60 sec. Argument -c for command and arguments
 async def rss_monitor():
     chat = Config.RSS_CHAT
     if not chat:
-        LOGGER.warning("RSS_CHAT not added! Shutting down rss scheduler...")
-        scheduler.shutdown(wait=False)
+        LOGGER.warning("RSS_CHAT not added! Removing rss job...")
+        scheduler.remove_job("0")
         return
     if len(rss_dict) == 0:
         scheduler.pause()

@@ -204,6 +204,13 @@ def add_handlers():
     TgClient.bot.add_handler(CallbackQueryHandler(rss_listener, filters=regex("^rss")))
     TgClient.bot.add_handler(
         MessageHandler(
+            autoleech_status,
+            filters=command(BotCommands.AutoLeechCommand, case_sensitive=True)
+            & CustomFilters.sudo,
+        )
+    )
+    TgClient.bot.add_handler(
+        MessageHandler(
             run_shell,
             filters=command(BotCommands.ShellCommand, case_sensitive=True)
             & CustomFilters.owner,

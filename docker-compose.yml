@@ -4,3 +4,5 @@ services:
     command: bash start.sh
     restart: unless-stopped
     network_mode: "host"
+    volumes:
+      - ./autoleech:/app/autoleech
