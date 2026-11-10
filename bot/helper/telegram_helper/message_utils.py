@@ -1,4 +1,4 @@
-from asyncio import sleep
+from asyncio import Lock, sleep
 from pyrogram.errors import FloodWait, FloodPremiumWait
 from re import match as re_match
 from time import time
@@ -10,15 +10,31 @@ from ..ext_utils.bot_utils import SetInterval
 from ..ext_utils.exceptions import TgLinkException
 from ..ext_utils.status_utils import get_readable_message
 
+# Telegram allows ~1 msg/sec per chat; 3 tasks finishing a tick fire 3 sends at
+# once and earn a 420. Serialise outbound text with a small gap instead.
+_SEND_GAP = 3.0
+_gate = Lock()
+_gate_last = 0.0
+
+
+async def _throttle():
+    global _gate_last
+    async with _gate:
+        wait = _gate_last + _SEND_GAP - time()
+        if wait > 0:
+            await sleep(wait)
+        _gate_last = time()
+
 
 async def send_message(message, text, buttons=None, block=True):
+    await _throttle()
     try:
         return await message.reply(
             text=text,
             disable_notification=True,
             reply_markup=buttons,
         )
-    except FloodWait as f:
+    except (FloodWait, FloodPremiumWait) as f:
         LOGGER.warning(str(f))
         if not block:
             return str(f)
@@ -30,15 +46,14 @@ async def send_message(message, text, buttons=None, block=True):
 
 
 async def edit_message(message, text, buttons=None, block=True):
+    await _throttle()
     try:
         return await message.edit(
             text=text,
             reply_markup=buttons,
         )
-    except FloodWait as f:
+    except (FloodWait, FloodPremiumWait) as f:
         LOGGER.warning(str(f))
-        if not block:
-            return str(f)
         await sleep(f.value * 1.2)
         return await edit_message(message, text, buttons, block)
     except Exception as e:
@@ -47,6 +62,7 @@ async def edit_message(message, text, buttons=None, block=True):
 
 
 async def send_file(message, file, caption=""):
+    await _throttle()
     try:
         return await message.reply_document(
             document=file, caption=caption, disable_notification=True
@@ -61,6 +77,7 @@ async def send_file(message, file, caption=""):
 
 
 async def send_rss(text, chat_id, thread_id):
+    await _throttle()
     try:
         return await TgClient.bot.send_message(
             chat_id=chat_id,
@@ -209,7 +226,7 @@ async def update_status_message(sid, force=False):
                 status_dict[sid]["message"], text, buttons, block=False
             )
             if isinstance(message, str):
-                if message.startswith("Telegram says: [40"):
+                if message.startswith("Telegram says: [40") and "FLOOD_WAIT" not in message:
                     del status_dict[sid]
                     if obj := intervals["status"].get(sid):
                         obj.cancel()
