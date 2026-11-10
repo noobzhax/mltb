@@ -7,6 +7,7 @@ after AUTOLEECH_MAX_TRIES so a broken URL never blocks the queue.
 
 import os
 from asyncio import Lock, sleep
+from os import statvfs
 from datetime import datetime, timedelta
 
 from aiofiles import open as aiopen
@@ -140,6 +141,11 @@ async def _reap():
     await _write_tries(tries)
 
 
+def _free_gb():
+    st = statvfs("/")
+    return st.f_bavail * st.f_frsize / (1024**3)
+
+
 async def autoleech_monitor():
     if not Config.AUTOLEECH:
         return
@@ -149,6 +155,13 @@ async def autoleech_monitor():
 
         slots = (Config.QUEUE_ALL or 3) - await _active_count()
         if slots <= 0:
+            return
+        free = _free_gb()
+        if free < Config.AUTOLEECH_MIN_FREE_GB:
+            LOGGER.warning(
+                f"AutoLeech paused: only {free:.1f} GB free "
+                f"(min {Config.AUTOLEECH_MIN_FREE_GB} GB)"
+            )
             return
 
         done = set(await _read_lines(_done_path()))
@@ -179,7 +192,7 @@ async def autoleech_monitor():
             _inflight[link] = datetime.now()
             await leech(TgClient.bot, msg)
             LOGGER.info(f"AutoLeech dispatch: {link}")
-            await sleep(2)
+            await sleep(Config.AUTOLEECH_DISPATCH_GAP)
     except Exception as e:
         LOGGER.error(f"AutoLeech monitor error: {e}")
 
@@ -199,6 +212,8 @@ async def autoleech_status(_, message):
         f"Done: <code>{len(done)}</code>\n"
         f"Dead: <code>{len(dead)}</code>\n"
         f"Retrying: <code>{len(tries)}</code>\n"
+        f"Free disk: <code>{_free_gb():.1f} GB</code> "
+        f"(min {Config.AUTOLEECH_MIN_FREE_GB})\n"
         f"Dir: <code>{Config.AUTOLEECH_DIR}</code>",
     )
 
